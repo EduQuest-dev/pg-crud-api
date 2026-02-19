@@ -35,11 +35,11 @@ const FILTER_OPERATORS: Record<string, string> = {
 };
 
 function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
+  return `"${name.replaceAll('"', '""')}"`;
 }
 
 function escapeLike(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
+  return value.replaceAll(/[%_\\]/g, String.raw`\$&`);
 }
 
 function isValidColumn(table: TableInfo, col: string): boolean {

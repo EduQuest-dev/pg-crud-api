@@ -17,6 +17,11 @@ import { handleDbError } from "../errors/pg-errors.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
+function parseCommaSeparated(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value).split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export function buildPkParams(table: TableInfo, params: Record<string, string>): Record<string, unknown> | null {
   const pkValues: Record<string, unknown> = {};
 
@@ -213,10 +218,10 @@ export async function registerCrudRoutes(
             pageSize: Number(query.pageSize) || config.defaultPageSize,
             sortBy: query.sortBy as string,
             sortOrder: query.sortOrder as "asc" | "desc",
-            select: query.select ? String(query.select).split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+            select: query.select ? parseCommaSeparated(query.select) : undefined,
             search: query.search as string,
             searchColumns: query.searchColumns
-              ? String(query.searchColumns).split(",").map((s) => s.trim()).filter(Boolean)
+              ? parseCommaSeparated(query.searchColumns)
               : table.columns.filter((c) => ["varchar", "text", "char", "name"].includes(c.udtName)).map((c) => c.name),
             filters: Object.keys(filters).length > 0 ? filters : undefined,
           };

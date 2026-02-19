@@ -31,7 +31,7 @@ export function parseIntOrDefault(value: string | undefined, fallback: number): 
 }
 
 export function parseCorsOrigins(value: string | undefined): string | boolean {
-  if (!value) return process.env.NODE_ENV === "production" ? false : true;
+  if (!value) return process.env.NODE_ENV !== "production";
   if (value === "true") return true;
   if (value === "false") return false;
   return value;

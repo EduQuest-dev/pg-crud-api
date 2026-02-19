@@ -226,7 +226,7 @@ export async function registerCrudRoutes(
             pool.query(buildCountQuery(table, opts)),
           ]);
 
-          const total = parseInt(countResult.rows[0].total, 10);
+          const total = Number.parseInt(countResult.rows[0].total, 10);
           const pageSize = opts.pageSize || config.defaultPageSize;
 
           return {
@@ -245,11 +245,12 @@ export async function registerCrudRoutes(
     });
 
     // Shared params schema for PK-based routes
-    const pkDescription = table.primaryKeys.length > 1
-      ? `Composite PK: ${table.primaryKeys.join(",")}`
-      : table.primaryKeys.length === 1
-        ? `Primary key (${table.primaryKeys[0]})`
-        : undefined;
+    let pkDescription: string | undefined;
+    if (table.primaryKeys.length > 1) {
+      pkDescription = `Composite PK: ${table.primaryKeys.join(",")}`;
+    } else if (table.primaryKeys.length === 1) {
+      pkDescription = `Primary key (${table.primaryKeys[0]})`;
+    }
 
     const paramsSchema = pkDescription
       ? {

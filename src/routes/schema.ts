@@ -92,7 +92,7 @@ export function mapPgType(col: ColumnInfo): AgentColumnType {
 
 // ─── Schema Builders ─────────────────────────────────────────────────
 
-const SEARCHABLE_TYPES = ["varchar", "text", "char", "name"];
+const SEARCHABLE_TYPES = new Set(["varchar", "text", "char", "name"]);
 
 export function buildAgentColumn(col: ColumnInfo, table: TableInfo) {
   const mapped = mapPgType(col);
@@ -137,7 +137,7 @@ export function buildAgentTable(table: TableInfo, allTables: Map<string, TableIn
       };
     }),
     searchableColumns: table.columns
-      .filter((c) => SEARCHABLE_TYPES.includes(c.udtName))
+      .filter((c) => SEARCHABLE_TYPES.has(c.udtName))
       .map((c) => c.name),
   };
 }

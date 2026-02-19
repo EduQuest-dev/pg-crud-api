@@ -193,11 +193,12 @@ async function main() {
             transformSpecification: (swaggerObject: Record<string, unknown>, request: { headers: Record<string, string | string[] | undefined> }) => {
               const authHeader = request.headers.authorization;
               const apiKeyHeader = request.headers["x-api-key"];
-              const key = (typeof authHeader === "string" && authHeader.startsWith("Bearer ")
-                ? authHeader.slice(7).trim()
-                : typeof apiKeyHeader === "string"
-                  ? apiKeyHeader.trim()
-                  : null);
+              let key: string | null = null;
+              if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+                key = authHeader.slice(7).trim();
+              } else if (typeof apiKeyHeader === "string") {
+                key = apiKeyHeader.trim();
+              }
               if (key && verifyApiKey(key, config.apiSecret!).valid) {
                 return swaggerObject;
               }
@@ -270,7 +271,7 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+await main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });

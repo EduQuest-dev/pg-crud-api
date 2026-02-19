@@ -255,7 +255,6 @@ describe("CRUD Routes - CREATE", () => {
     expect(res.statusCode).toBe(201);
     // Fastify's oneOf response serialization may reorder the shape,
     // but the handler sends { data: [...], count: N }
-    const body = res.json();
     // The response contains the bulk insert result
     // Fastify's oneOf serializer tries to match the first schema (rowSchema),
     // which may strip fields. Verify the query was called correctly instead.

@@ -34,12 +34,16 @@ export function createMockPool() {
   } as unknown as Pool;
 }
 
-export async function buildTestApp(options: {
+interface BuildTestAppOptions {
   dbSchema: DatabaseSchema;
   pool?: Pool;
   authEnabled?: boolean;
   authSecret?: string;
-} = { dbSchema: { tables: new Map(), schemas: [] } }): Promise<FastifyInstance> {
+}
+
+const DEFAULT_OPTIONS: BuildTestAppOptions = { dbSchema: { tables: new Map(), schemas: [] } };
+
+export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTIONS): Promise<FastifyInstance> {
   const pool = options.pool ?? createMockPool();
 
   const app = Fastify({ logger: false });

@@ -6,6 +6,7 @@ export default defineConfig({
     testTimeout: 10000,
     coverage: {
       provider: "v8",
+      reporter: ["json", "text"],
       include: ["src/**/*.ts"],
       exclude: ["src/index.ts", "src/auth/generate-key.ts"],
       thresholds: {

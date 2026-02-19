@@ -112,6 +112,19 @@ describe("CRUD Routes - LIST", () => {
     const selectCall = vi.mocked(mockPool.query).mock.calls[0][0] as any;
     expect(selectCall.text).toContain('"id", "name"');
   });
+
+  it("applies explicit searchColumns parameter", async () => {
+    vi.mocked(mockPool.query)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      .mockResolvedValueOnce({ rows: [{ total: "0" }], rowCount: 1 } as any);
+
+    await app.inject({ method: "GET", url: "/api/users?search=alice&searchColumns=name" });
+
+    const selectCall = vi.mocked(mockPool.query).mock.calls[0][0] as any;
+    expect(selectCall.text).toContain('"name"::text ILIKE');
+    // Should NOT search email since we explicitly specified only name
+    expect(selectCall.text).not.toContain('"email"::text ILIKE');
+  });
 });
 
 // ── GET by PK (GET /api/{table}/:id) ────────────────────────────────
@@ -171,6 +184,17 @@ describe("CRUD Routes - GET by PK", () => {
     const res = await app.inject({ method: "GET", url: "/api/user_roles/42" });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toContain("Composite primary key");
+  });
+
+  it("returns 400 on DB error during GET by PK", async () => {
+    const pgError = Object.assign(new Error("invalid input syntax"), {
+      code: "22P02",
+    });
+    vi.mocked(mockPool.query).mockRejectedValueOnce(pgError);
+
+    const res = await app.inject({ method: "GET", url: "/api/users/abc" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("Invalid input");
   });
 });
 
@@ -283,7 +307,8 @@ describe("CRUD Routes - PUT", () => {
   let app: FastifyInstance;
   let mockPool: ReturnType<typeof createMockPool>;
   const users = makeUsersTable();
-  const dbSchema = makeDatabaseSchema([users]);
+  const compositePk = makeCompositePkTable();
+  const dbSchema = makeDatabaseSchema([users, compositePk]);
 
   beforeAll(async () => {
     mockPool = createMockPool();
@@ -323,6 +348,32 @@ describe("CRUD Routes - PUT", () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it("returns 400 for invalid composite PK on PUT", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/user_roles/42",
+      payload: { granted_at: "2024-01-01T00:00:00Z" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain("Composite primary key");
+  });
+
+  it("returns 409 on DB unique violation during PUT", async () => {
+    const pgError = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+      detail: "Key already exists",
+      constraint: "users_email_key",
+    });
+    vi.mocked(mockPool.query).mockRejectedValueOnce(pgError);
+
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/users/42",
+      payload: { name: "Alice", email: "dup@test.com", active: true },
+    });
+    expect(res.statusCode).toBe(409);
+  });
 });
 
 // ── UPDATE PATCH (PATCH /api/{table}/:id) ───────────────────────────
@@ -331,7 +382,8 @@ describe("CRUD Routes - PATCH", () => {
   let app: FastifyInstance;
   let mockPool: ReturnType<typeof createMockPool>;
   const users = makeUsersTable();
-  const dbSchema = makeDatabaseSchema([users]);
+  const compositePk = makeCompositePkTable();
+  const dbSchema = makeDatabaseSchema([users, compositePk]);
 
   beforeAll(async () => {
     mockPool = createMockPool();
@@ -371,6 +423,32 @@ describe("CRUD Routes - PATCH", () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it("returns 400 for invalid composite PK on PATCH", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/user_roles/42",
+      payload: { granted_at: "2024-06-01T00:00:00Z" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain("Composite primary key");
+  });
+
+  it("returns 409 on DB unique violation during PATCH", async () => {
+    const pgError = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+      detail: "Key already exists",
+      constraint: "users_email_key",
+    });
+    vi.mocked(mockPool.query).mockRejectedValueOnce(pgError);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/users/42",
+      payload: { email: "dup@test.com" },
+    });
+    expect(res.statusCode).toBe(409);
+  });
 });
 
 // ── DELETE (DELETE /api/{table}/:id) ────────────────────────────────
@@ -379,7 +457,8 @@ describe("CRUD Routes - DELETE", () => {
   let app: FastifyInstance;
   let mockPool: ReturnType<typeof createMockPool>;
   const users = makeUsersTable();
-  const dbSchema = makeDatabaseSchema([users]);
+  const compositePk = makeCompositePkTable();
+  const dbSchema = makeDatabaseSchema([users, compositePk]);
 
   beforeAll(async () => {
     mockPool = createMockPool();
@@ -412,6 +491,22 @@ describe("CRUD Routes - DELETE", () => {
 
     const res = await app.inject({ method: "DELETE", url: "/api/users/999" });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 400 for invalid composite PK on DELETE", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/api/user_roles/42" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain("Composite primary key");
+  });
+
+  it("returns 500 on unexpected DB error during DELETE", async () => {
+    const pgError = Object.assign(new Error("something broke"), {
+      code: "42601",
+    });
+    vi.mocked(mockPool.query).mockRejectedValueOnce(pgError);
+
+    const res = await app.inject({ method: "DELETE", url: "/api/users/42" });
+    expect(res.statusCode).toBe(500);
   });
 });
 

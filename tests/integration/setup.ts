@@ -1,0 +1,95 @@
+import { vi } from "vitest";
+
+vi.mock("../../src/config.js", () => ({
+  config: {
+    defaultPageSize: 50,
+    maxPageSize: 1000,
+    maxBulkInsertRows: 1000,
+    bodyLimit: 5 * 1024 * 1024,
+    swaggerEnabled: false,
+    apiKeysEnabled: false,
+    apiSecret: null,
+    corsOrigins: true,
+    exposeDbErrors: false,
+  },
+}));
+
+import Fastify, { FastifyInstance, FastifyError } from "fastify";
+import { Pool } from "pg";
+import { config } from "../../src/config.js";
+import { registerCrudRoutes } from "../../src/routes/crud.js";
+import { registerSchemaRoutes } from "../../src/routes/schema.js";
+import { registerAuthHook } from "../../src/auth/api-key.js";
+import type { DatabaseSchema } from "../../src/db/introspector.js";
+
+export function createMockPool() {
+  const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+  return {
+    query: mockQuery,
+    connect: vi.fn().mockResolvedValue({
+      query: mockQuery,
+      release: vi.fn(),
+    }),
+    end: vi.fn().mockResolvedValue(undefined),
+  } as unknown as Pool;
+}
+
+export async function buildTestApp(options: {
+  dbSchema: DatabaseSchema;
+  pool?: Pool;
+  authEnabled?: boolean;
+  authSecret?: string;
+} = { dbSchema: { tables: new Map(), schemas: [] } }): Promise<FastifyInstance> {
+  const pool = options.pool ?? createMockPool();
+
+  const app = Fastify({ logger: false });
+
+  // Error handler matching index.ts
+  app.setErrorHandler((error: FastifyError, _request, reply) => {
+    if (error.validation) {
+      const details = error.validation.map((v: any) => ({
+        field: v.instancePath || v.params?.missingProperty || "unknown",
+        message: v.message || "Invalid value",
+        ...(v.params ? { constraint: v.params } : {}),
+      }));
+      return reply.status(400).send({
+        error: "Validation Error",
+        message: `${details.length} validation error(s)`,
+        details,
+      });
+    }
+    reply.status(error.statusCode || 500).send({
+      error: error.name || "Error",
+      message: error.message,
+    });
+  });
+
+  if (options.authEnabled && options.authSecret) {
+    registerAuthHook(app, options.authSecret);
+  }
+
+  // Health check (mirrors index.ts)
+  app.get("/api/_health", async (request, reply) => {
+    try {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Health check timeout")), 5000)
+      );
+      await Promise.race([pool.query("SELECT 1"), timeout]);
+      return { status: "healthy", tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
+    } catch (err) {
+      request.log.error(err, "Health check failed");
+      return reply.status(503).send({ status: "unhealthy" });
+    }
+  });
+
+  // Suppress console.log from route registration
+  const consoleLog = console.log;
+  console.log = () => {};
+  await registerCrudRoutes(app, pool, options.dbSchema);
+  console.log = consoleLog;
+
+  await registerSchemaRoutes(app, options.dbSchema);
+  await app.ready();
+
+  return app;
+}

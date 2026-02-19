@@ -154,38 +154,45 @@ export function buildCountQuery(table: TableInfo, opts: ListOptions): QueryResul
   return { text: sql, values: where.values };
 }
 
+function validateFilterColumn(column: string, table: TableInfo): void {
+  if (!isValidColumn(table, column)) {
+    throw new Error(
+      `Filter column '${column}' does not exist. ` +
+      `Available: ${table.columns.map((c) => c.name).join(", ")}`
+    );
+  }
+}
+
+function parseOperatorAndValue(strValue: string): { op: string; value: string } {
+  const colonIdx = strValue.indexOf(":");
+  if (colonIdx <= 0) return { op: "eq", value: strValue };
+
+  const maybeOp = strValue.slice(0, colonIdx);
+  if (!FILTER_OPERATORS[maybeOp]) return { op: "eq", value: strValue };
+
+  return { op: maybeOp, value: strValue.slice(colonIdx + 1) };
+}
+
+function coerceFilterValue(op: string, rawValue: string): unknown {
+  if (op === "is") {
+    return rawValue.toLowerCase() === "null" ? null : rawValue;
+  }
+  if (op === "in") {
+    const parts = rawValue.split(",");
+    if (parts.length > 100) {
+      throw new Error(`IN filter limited to 100 values, got ${parts.length}`);
+    }
+    return parts;
+  }
+  return rawValue;
+}
+
 function parseFiltersFromObject(filters: Record<string, unknown>, table: TableInfo): ParsedFilter[] {
   const result: ParsedFilter[] = [];
   for (const [column, rawValue] of Object.entries(filters)) {
-    if (!isValidColumn(table, column)) {
-      throw new Error(
-        `Filter column '${column}' does not exist. ` +
-        `Available: ${table.columns.map((c) => c.name).join(", ")}`
-      );
-    }
-    const strValue = String(rawValue);
-    const colonIdx = strValue.indexOf(":");
-    let op = "eq";
-    let value: unknown = strValue;
-
-    if (colonIdx > 0) {
-      const maybeOp = strValue.slice(0, colonIdx);
-      if (FILTER_OPERATORS[maybeOp]) {
-        op = maybeOp;
-        value = strValue.slice(colonIdx + 1);
-      }
-    }
-
-    if (op === "is") {
-      value = String(value).toLowerCase() === "null" ? null : value;
-    } else if (op === "in") {
-      const parts = String(value).split(",");
-      if (parts.length > 100) {
-        throw new Error(`IN filter limited to 100 values, got ${parts.length}`);
-      }
-      value = parts;
-    }
-
+    validateFilterColumn(column, table);
+    const { op, value: rawParsed } = parseOperatorAndValue(String(rawValue));
+    const value = coerceFilterValue(op, rawParsed);
     result.push({ column, operator: op, value });
   }
   return result;

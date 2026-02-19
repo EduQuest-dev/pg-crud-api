@@ -5,6 +5,7 @@ import {
   makeUsersTable,
   makeCompositePkTable,
   makeNoPkTable,
+  makeNonPublicSchemaTable,
   makeDatabaseSchema,
 } from "../fixtures/tables.js";
 
@@ -573,3 +574,70 @@ describe("CRUD Routes - No PK table", () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// ── GET by PK with select param ─────────────────────────────────────
+
+describe("CRUD Routes - GET by PK with select", () => {
+  let app: FastifyInstance;
+  let mockPool: ReturnType<typeof createMockPool>;
+  const users = makeUsersTable();
+  const dbSchema = makeDatabaseSchema([users]);
+
+  beforeAll(async () => {
+    mockPool = createMockPool();
+    app = await buildTestApp({ dbSchema, pool: mockPool as any });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    vi.mocked(mockPool.query).mockReset();
+  });
+
+  it("passes select columns to GET by PK query", async () => {
+    vi.mocked(mockPool.query).mockResolvedValueOnce({
+      rows: [{ id: 42, name: "Alice" }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/users/42?select=id,name" });
+    expect(res.statusCode).toBe(200);
+    const queryCall = vi.mocked(mockPool.query).mock.calls[0][0] as any;
+    expect(queryCall.text).toContain('"id", "name"');
+  });
+});
+
+// ── Non-public schema table ─────────────────────────────────────────
+
+describe("CRUD Routes - Non-public schema", () => {
+  let app: FastifyInstance;
+  let mockPool: ReturnType<typeof createMockPool>;
+  const metrics = makeNonPublicSchemaTable();
+  const dbSchema = makeDatabaseSchema([metrics]);
+
+  beforeAll(async () => {
+    mockPool = createMockPool();
+    app = await buildTestApp({ dbSchema, pool: mockPool as any });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    vi.mocked(mockPool.query).mockReset();
+    vi.mocked(mockPool.query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
+  });
+
+  it("registers routes with schema__table path for non-public schema", async () => {
+    vi.mocked(mockPool.query)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      .mockResolvedValueOnce({ rows: [{ total: "0" }], rowCount: 1 } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/reporting__metrics" });
+    expect(res.statusCode).toBe(200);
+  });
+});
+

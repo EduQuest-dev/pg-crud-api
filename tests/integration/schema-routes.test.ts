@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp, createMockPool } from "./setup.js";
-import { makeUsersTable, makeNoPkTable, makeDatabaseSchema } from "../fixtures/tables.js";
+import { makeUsersTable, makeNoPkTable, makeTableWithNonPublicFk, makeDatabaseSchema } from "../fixtures/tables.js";
 
 describe("Schema Routes", () => {
   let app: FastifyInstance;
@@ -74,5 +74,27 @@ describe("Schema Routes", () => {
       expect(nameCol.type).toBe("string");
       expect(nameCol.insertRequired).toBe(true);
     });
+  });
+});
+
+describe("Schema Routes - Non-public FK ref", () => {
+  let app: FastifyInstance;
+  const reports = makeTableWithNonPublicFk();
+  const dbSchema = makeDatabaseSchema([reports]);
+
+  beforeAll(async () => {
+    app = await buildTestApp({ dbSchema, pool: createMockPool() as any });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("generates refPath with schema__table for non-public FK references", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/_schema/reports" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const fk = body.table.foreignKeys[0];
+    expect(fk.refPath).toBe("/api/reporting__metrics");
   });
 });

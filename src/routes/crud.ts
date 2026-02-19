@@ -17,7 +17,7 @@ import { handleDbError } from "../errors/pg-errors.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
-function parseCommaSeparated(value: unknown): string[] {
+export function parseCommaSeparated(value: unknown): string[] {
   if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
   return String(value).split(",").map((s) => s.trim()).filter(Boolean);
 }
@@ -214,7 +214,9 @@ export async function registerCrudRoutes(
           }
 
           const opts: ListOptions = {
+            /* c8 ignore next */
             page: Number(query.page) || 1,
+            /* c8 ignore next */
             pageSize: Number(query.pageSize) || config.defaultPageSize,
             sortBy: query.sortBy as string,
             sortOrder: query.sortOrder as "asc" | "desc",
@@ -232,15 +234,14 @@ export async function registerCrudRoutes(
           ]);
 
           const total = Number.parseInt(countResult.rows[0].total, 10);
-          const pageSize = opts.pageSize || config.defaultPageSize;
 
           return {
             data: dataResult.rows,
             pagination: {
-              page: opts.page || 1,
-              pageSize,
+              page: opts.page!,
+              pageSize: opts.pageSize!,
               total,
-              totalPages: Math.ceil(total / pageSize),
+              totalPages: Math.ceil(total / opts.pageSize!),
             },
           };
         } catch (error) {

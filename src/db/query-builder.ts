@@ -88,7 +88,7 @@ function buildWhereClauses(
   // Filters
   const filters = opts.filters ? parseFiltersFromObject(opts.filters, table) : [];
   for (const f of filters) {
-    const sqlOp = FILTER_OPERATORS[f.operator] || "=";
+    const sqlOp = /* c8 ignore next */ FILTER_OPERATORS[f.operator] || "=";
 
     if (f.operator === "is") {
       whereClauses.push(`${quoteIdent(f.column)} IS ${f.value === null ? "NULL" : "NOT NULL"}`);

@@ -203,6 +203,20 @@ describe("buildSelectQuery", () => {
     expect(result.text).toContain('"name" = $1');
     expect(result.values[0]).toBe("John");
   });
+
+  it("treats unrecognized operator prefix as eq with full value", () => {
+    const result = buildSelectQuery(users, { filters: { name: "foo:bar" } });
+    expect(result.text).toContain('"name" = $1');
+    expect(result.values[0]).toBe("foo:bar");
+  });
+
+  it("ignores search when all searchColumns are invalid", () => {
+    const result = buildSelectQuery(users, {
+      search: "john",
+      searchColumns: ["nonexistent"],
+    });
+    expect(result.text).not.toContain("ILIKE");
+  });
 });
 
 // ── buildCountQuery ─────────────────────────────────────────────────

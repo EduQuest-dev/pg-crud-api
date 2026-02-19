@@ -9,7 +9,7 @@ vi.mock("../../src/config.js", () => ({
   },
 }));
 
-import { buildPkParams, buildJsonSchemaForTable, findTable } from "../../src/routes/crud.js";
+import { buildPkParams, buildJsonSchemaForTable, findTable, parseCommaSeparated } from "../../src/routes/crud.js";
 import { makeUsersTable, makeCompositePkTable, makeNoPkTable, makeDatabaseSchema, makeNonPublicSchemaTable } from "../fixtures/tables.js";
 
 const users = makeUsersTable();
@@ -131,5 +131,25 @@ describe("findTable", () => {
   it("returns undefined for non-existent routePath", () => {
     const result = findTable(dbSchema, "nonexistent");
     expect(result).toBeUndefined();
+  });
+});
+
+// ── parseCommaSeparated ─────────────────────────────────────────────
+
+describe("parseCommaSeparated", () => {
+  it("splits comma-separated string", () => {
+    expect(parseCommaSeparated("id,name,email")).toEqual(["id", "name", "email"]);
+  });
+
+  it("trims whitespace from string values", () => {
+    expect(parseCommaSeparated(" id , name ")).toEqual(["id", "name"]);
+  });
+
+  it("handles array input (from repeated query params)", () => {
+    expect(parseCommaSeparated(["id", "name", "email"])).toEqual(["id", "name", "email"]);
+  });
+
+  it("trims and filters empty values from array input", () => {
+    expect(parseCommaSeparated(["id", " ", "name", ""])).toEqual(["id", "name"]);
   });
 });

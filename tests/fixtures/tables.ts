@@ -112,6 +112,30 @@ export function makeTableWithForeignKeys(): TableInfo {
   };
 }
 
+export function makeTableWithNonPublicFk(): TableInfo {
+  return {
+    schema: "public",
+    name: "reports",
+    fqn: '"public"."reports"',
+    routePath: "reports",
+    primaryKeys: ["id"],
+    foreignKeys: [
+      {
+        constraintName: "reports_metric_id_fkey",
+        column: "metric_id",
+        refSchema: "reporting",
+        refTable: "metrics",
+        refColumn: "id",
+      },
+    ],
+    columns: [
+      makeColumn({ name: "id", dataType: "integer", udtName: "int4", isNullable: false, hasDefault: true, defaultValue: "nextval('reports_id_seq'::regclass)", ordinalPosition: 1 }),
+      makeColumn({ name: "metric_id", dataType: "integer", udtName: "int4", isNullable: false, hasDefault: false, ordinalPosition: 2 }),
+      makeColumn({ name: "note", dataType: "text", udtName: "text", isNullable: true, hasDefault: false, ordinalPosition: 3 }),
+    ],
+  };
+}
+
 export function makeDatabaseSchema(tables: TableInfo[]): DatabaseSchema {
   const map = new Map<string, TableInfo>();
   const schemas = new Set<string>();

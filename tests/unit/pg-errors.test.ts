@@ -116,4 +116,23 @@ describe("handleDbError", () => {
     handleDbError(err, reply);
     expect(reply.request.log.error).toHaveBeenCalledWith(err, "Unhandled database error");
   });
+
+  it("includes detail but omits constraint when exposeDbErrors is true and error has no constraint", () => {
+    (config as any).exposeDbErrors = true;
+    const reply = mockReply();
+    handleDbError(makeInvalidInput("invalid input detail"), reply);
+    const sent = reply.send.mock.calls[0][0];
+    expect(sent.detail).toBe("invalid input detail");
+    expect(sent).not.toHaveProperty("constraint");
+  });
+
+  it("falls back to error message when detail is undefined and exposeDbErrors is true", () => {
+    (config as any).exposeDbErrors = true;
+    const reply = mockReply();
+    handleDbError(makeInvalidInput(), reply);
+    const sent = reply.send.mock.calls[0][0];
+    // detail is undefined, so ?? falls back to err.message
+    expect(sent.detail).toBe("invalid input syntax for type integer");
+    expect(sent).not.toHaveProperty("constraint");
+  });
 });

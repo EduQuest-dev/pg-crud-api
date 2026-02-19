@@ -11,6 +11,22 @@ import { registerCrudRoutes } from "./routes/crud.js";
 import { registerSchemaRoutes } from "./routes/schema.js";
 import { registerAuthHook, verifyApiKey } from "./auth/api-key.js";
 
+async function testDatabaseConnection(pool: Pool): Promise<void> {
+  let client;
+  try {
+    client = await pool.connect();
+    const versionResult = await client.query("SELECT version()");
+    console.log(`🐘 Connected to PostgreSQL`);
+    console.log(`   ${versionResult.rows[0].version.split(",")[0]}`);
+  } catch (err) {
+    console.error("❌ Failed to connect to database:", (err as Error).message);
+    await pool.end().catch(() => {});
+    process.exit(1);
+  } finally {
+    client?.release();
+  }
+}
+
 async function main() {
   // ── Database connection ──
   const pool = new Pool({
@@ -20,21 +36,7 @@ async function main() {
 
   try {
 
-  {
-    let client;
-    try {
-      client = await pool.connect();
-      const versionResult = await client.query("SELECT version()");
-      console.log(`🐘 Connected to PostgreSQL`);
-      console.log(`   ${versionResult.rows[0].version.split(",")[0]}`);
-    } catch (err) {
-      console.error("❌ Failed to connect to database:", (err as Error).message);
-      await pool.end().catch(() => {});
-      process.exit(1);
-    } finally {
-      client?.release();
-    }
-  }
+  await testDatabaseConnection(pool);
 
   // ── Introspect database ──
   console.log("\n🔍 Introspecting database...");

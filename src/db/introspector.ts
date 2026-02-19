@@ -104,19 +104,19 @@ const SCHEMAS_QUERY = `
   ORDER BY schema_name;
 `;
 
-// ─── Introspect ──────────────────────────────────────────────────────
+// ─── Helper Functions ────────────────────────────────────────────────
 
-export async function introspectDatabase(pool: Pool): Promise<DatabaseSchema> {
-  // 1. Determine which schemas to scan
-  const allSchemas = await pool.query(SCHEMAS_QUERY);
-  let targetSchemas: string[] = allSchemas.rows.map((r) => r.schema_name);
+function makeFqn(schema: string, table: string): string {
+  return `"${schema}"."${table}"`;
+}
 
-  // Filter to only requested schemas if configured
+function resolveTargetSchemas(allSchemaNames: string[]): string[] {
+  let targetSchemas = allSchemaNames;
+
   if (config.schemas.length > 0) {
     targetSchemas = targetSchemas.filter((s) => config.schemas.includes(s));
   }
 
-  // Remove system schemas, temp schemas, and excluded schemas
   const excluded = new Set([...SYSTEM_SCHEMAS, ...config.excludeSchemas]);
   targetSchemas = targetSchemas.filter(
     (s) => !excluded.has(s) && !s.startsWith("pg_temp") && !s.startsWith("pg_toast_temp")
@@ -126,21 +126,15 @@ export async function introspectDatabase(pool: Pool): Promise<DatabaseSchema> {
     throw new Error("No schemas found to introspect. Check your SCHEMAS and EXCLUDE_SCHEMAS config.");
   }
 
-  console.log(`📦 Introspecting schemas: ${targetSchemas.join(", ")}`);
+  return targetSchemas;
+}
 
-  // 2. Fetch columns, PKs, FKs in parallel
-  const [colResult, pkResult, fkResult] = await Promise.all([
-    pool.query(COLUMNS_QUERY, [targetSchemas]),
-    pool.query(PRIMARY_KEYS_QUERY, [targetSchemas]),
-    pool.query(FOREIGN_KEYS_QUERY, [targetSchemas]),
-  ]);
-
-  // 3. Build table map
+function buildTableMap(colRows: any[]): Map<string, TableInfo> {
   const tables = new Map<string, TableInfo>();
   const excludedTables = new Set(config.excludeTables);
 
-  for (const row of colResult.rows) {
-    const fqn = `"${row.table_schema}"."${row.table_name}"`;
+  for (const row of colRows) {
+    const fqn = makeFqn(row.table_schema, row.table_name);
     const tableKey = `${row.table_schema}.${row.table_name}`;
 
     if (excludedTables.has(tableKey)) continue;
@@ -174,42 +168,61 @@ export async function introspectDatabase(pool: Pool): Promise<DatabaseSchema> {
     });
   }
 
-  // 4. Attach primary keys
-  for (const row of pkResult.rows) {
-    const fqn = `"${row.table_schema}"."${row.table_name}"`;
-    const table = tables.get(fqn);
-    if (table) {
-      table.primaryKeys.push(row.column_name);
-    }
-  }
+  return tables;
+}
 
-  // 5. Attach foreign keys
-  for (const row of fkResult.rows) {
-    const fqn = `"${row.table_schema}"."${row.table_name}"`;
-    const table = tables.get(fqn);
-    if (table) {
-      table.foreignKeys.push({
-        constraintName: row.constraint_name,
-        column: row.column_name,
-        refSchema: row.ref_schema,
-        refTable: row.ref_table,
-        refColumn: row.ref_column,
-      });
-    }
+function attachPrimaryKeys(tables: Map<string, TableInfo>, pkRows: any[]): void {
+  for (const row of pkRows) {
+    const table = tables.get(makeFqn(row.table_schema, row.table_name));
+    table?.primaryKeys.push(row.column_name);
   }
+}
 
-  // 6. Warn about tables without primary keys and dangling FK references
+function attachForeignKeys(tables: Map<string, TableInfo>, fkRows: any[]): void {
+  for (const row of fkRows) {
+    const table = tables.get(makeFqn(row.table_schema, row.table_name));
+    table?.foreignKeys.push({
+      constraintName: row.constraint_name,
+      column: row.column_name,
+      refSchema: row.ref_schema,
+      refTable: row.ref_table,
+      refColumn: row.ref_column,
+    });
+  }
+}
+
+function warnTableIssues(tables: Map<string, TableInfo>): void {
   for (const [fqn, table] of tables) {
     if (table.primaryKeys.length === 0) {
       console.warn(`⚠️  Table ${fqn} has no primary key — update/delete by PK disabled`);
     }
     for (const fk of table.foreignKeys) {
-      const refFqn = `"${fk.refSchema}"."${fk.refTable}"`;
+      const refFqn = makeFqn(fk.refSchema, fk.refTable);
       if (!tables.has(refFqn)) {
         console.warn(`⚠️  ${fqn}.${fk.column} references ${refFqn} which is outside the introspection scope`);
       }
     }
   }
+}
+
+// ─── Introspect ──────────────────────────────────────────────────────
+
+export async function introspectDatabase(pool: Pool): Promise<DatabaseSchema> {
+  const allSchemas = await pool.query(SCHEMAS_QUERY);
+  const targetSchemas = resolveTargetSchemas(allSchemas.rows.map((r) => r.schema_name));
+
+  console.log(`📦 Introspecting schemas: ${targetSchemas.join(", ")}`);
+
+  const [colResult, pkResult, fkResult] = await Promise.all([
+    pool.query(COLUMNS_QUERY, [targetSchemas]),
+    pool.query(PRIMARY_KEYS_QUERY, [targetSchemas]),
+    pool.query(FOREIGN_KEYS_QUERY, [targetSchemas]),
+  ]);
+
+  const tables = buildTableMap(colResult.rows);
+  attachPrimaryKeys(tables, pkResult.rows);
+  attachForeignKeys(tables, fkResult.rows);
+  warnTableIssues(tables);
 
   console.log(`✅ Found ${tables.size} tables across ${targetSchemas.length} schemas`);
   return { tables, schemas: targetSchemas };

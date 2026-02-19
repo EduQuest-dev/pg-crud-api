@@ -96,13 +96,15 @@ For each table, the following endpoints are created:
 | `PATCH`  | `/api/{table}/:id`            | Partial update by PK     |
 | `DELETE` | `/api/{table}/:id`            | Delete by PK             |
 
-### Meta Endpoints
+### Meta & Schema Endpoints
 
-| Method | Path                          | Description               |
-|--------|-------------------------------|---------------------------|
-| `GET`  | `/api/_health`                | Health check              |
-| `GET`  | `/api/_meta/tables`           | List all available tables |
-| `GET`  | `/api/_meta/tables/:table`    | Table schema details      |
+| Method | Path                          | Description                              |
+|--------|-------------------------------|------------------------------------------|
+| `GET`  | `/api/_health`                | Health check                             |
+| `GET`  | `/api/_meta/tables`           | List all available tables                |
+| `GET`  | `/api/_meta/tables/:table`    | Table schema details                     |
+| `GET`  | `/api/_schema`                | Full API schema (for LLM agents / tools) |
+| `GET`  | `/api/_schema/:table`         | Single table schema                      |
 
 ### Schema Routing
 
@@ -222,19 +224,23 @@ DELETE /api/user_roles/42,7
 
 All configuration via environment variables (`.env`):
 
-| Variable           | Default                | Description                                      |
-|--------------------|------------------------|--------------------------------------------------|
-| `DATABASE_URL`     | `postgresql://...`     | PostgreSQL connection string                     |
-| `PORT`             | `3000`                 | Server port                                      |
-| `HOST`             | `0.0.0.0`              | Bind address                                     |
-| `API_SECRET`       | *(none)*               | Secret for HMAC-SHA256 API key derivation        |
-| `API_KEYS_ENABLED` | `true`                 | Enable/disable API key authentication            |
-| `SCHEMAS`          | *(all non-system)*     | Comma-separated schemas to expose                |
-| `EXCLUDE_SCHEMAS`  | *(none)*               | Comma-separated schemas to hide                  |
-| `EXCLUDE_TABLES`   | *(none)*               | Tables to hide (`schema.table` format)           |
-| `DEFAULT_PAGE_SIZE`| `50`                   | Default pagination size                          |
-| `MAX_PAGE_SIZE`    | `1000`                 | Maximum allowed page size                        |
-| `SWAGGER_ENABLED`  | `true`                 | Enable Swagger UI at `/docs`                     |
+| Variable             | Default                | Description                                         |
+|----------------------|------------------------|-----------------------------------------------------|
+| `DATABASE_URL`       | `postgresql://...`     | PostgreSQL connection string (`jdbc:` prefix auto-stripped) |
+| `PORT`               | `3000`                 | Server port                                         |
+| `HOST`               | `0.0.0.0`              | Bind address                                        |
+| `API_SECRET`         | *(none)*               | Secret for HMAC-SHA256 API key derivation           |
+| `API_KEYS_ENABLED`   | `true`                 | Enable/disable API key authentication               |
+| `SCHEMAS`            | *(all non-system)*     | Comma-separated schemas to expose                   |
+| `EXCLUDE_SCHEMAS`    | *(none)*               | Comma-separated schemas to hide                     |
+| `EXCLUDE_TABLES`     | *(none)*               | Tables to hide (`schema.table` format)              |
+| `DEFAULT_PAGE_SIZE`  | `50`                   | Default pagination size                             |
+| `MAX_PAGE_SIZE`      | `1000`                 | Maximum allowed page size                           |
+| `MAX_BULK_INSERT_ROWS` | `1000`              | Maximum rows per bulk POST                          |
+| `BODY_LIMIT`         | `5242880` (5 MB)       | Maximum request body size in bytes                  |
+| `SWAGGER_ENABLED`    | `true`                 | Enable Swagger UI at `/docs`                        |
+| `CORS_ORIGINS`       | `true` (dev) / `false` (prod) | CORS allowed origins (`true`/`false`/origin string) |
+| `EXPOSE_DB_ERRORS`   | `false`                | Include PostgreSQL error details in responses       |
 
 ---
 
@@ -263,6 +269,19 @@ The API includes API key authentication out of the box. For production deploymen
 
 ---
 
+## LLM Agent Integration
+
+The API includes machine-readable schema endpoints designed for LLM agents and AI tools:
+
+- **`GET /api/_schema`** returns all tables, columns, types, operations, foreign keys, and API capabilities in a single call.
+- **`GET /api/_schema/:table`** returns the schema for a single table.
+
+Use these endpoints to dynamically discover the database structure and construct valid CRUD requests without hardcoded knowledge.
+
+See [`docs/llm-agent-guide.md`](docs/llm-agent-guide.md) for the full integration guide.
+
+---
+
 ## Architecture
 
 ```
@@ -273,7 +292,8 @@ src/
 │   ├── introspector.ts   # Database schema introspection via information_schema
 │   └── query-builder.ts  # Dynamic parameterized SQL generation
 ├── routes/
-│   └── crud.ts           # CRUD route registration & handlers
+│   ├── crud.ts           # CRUD route registration & handlers
+│   └── schema.ts         # Agent-friendly schema endpoint (/api/_schema)
 ├── auth/
 │   ├── api-key.ts        # HMAC-SHA256 API key generation & verification
 │   └── generate-key.ts   # CLI utility for key generation

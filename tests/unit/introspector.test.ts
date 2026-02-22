@@ -9,8 +9,9 @@ vi.mock("../../src/config.js", () => ({
   SYSTEM_SCHEMAS: ["pg_catalog", "information_schema", "pg_toast"],
 }));
 
-import { introspectDatabase } from "../../src/db/introspector.js";
+import { introspectDatabase, computeDatabaseHash } from "../../src/db/introspector.js";
 import { config } from "../../src/config.js";
+import { makeDatabaseSchema, makeUsersTable, makeCompositePkTable, makeTableWithForeignKeys } from "../fixtures/tables.js";
 
 // ─── Mock Pool Helpers ──────────────────────────────────────────────
 
@@ -456,5 +457,46 @@ describe("introspectDatabase", () => {
     await introspectDatabase(pool);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Introspecting schemas"));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Found 1 tables"));
+  });
+});
+
+// ─── computeDatabaseHash ─────────────────────────────────────────────
+
+describe("computeDatabaseHash", () => {
+  it("returns a 64-char hex string (SHA-256)", () => {
+    const schema = makeDatabaseSchema([makeUsersTable()]);
+    const hash = computeDatabaseHash(schema);
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("is deterministic — same schema produces the same hash", () => {
+    const schema = makeDatabaseSchema([makeUsersTable()]);
+    expect(computeDatabaseHash(schema)).toBe(computeDatabaseHash(schema));
+  });
+
+  it("changes when a table is added", () => {
+    const schema1 = makeDatabaseSchema([makeUsersTable()]);
+    const schema2 = makeDatabaseSchema([makeUsersTable(), makeCompositePkTable()]);
+    expect(computeDatabaseHash(schema1)).not.toBe(computeDatabaseHash(schema2));
+  });
+
+  it("changes when a table has different foreign keys", () => {
+    const schema1 = makeDatabaseSchema([makeUsersTable()]);
+    const schema2 = makeDatabaseSchema([makeTableWithForeignKeys()]);
+    expect(computeDatabaseHash(schema1)).not.toBe(computeDatabaseHash(schema2));
+  });
+
+  it("is order-independent — same tables in different insertion order produce same hash", () => {
+    const users = makeUsersTable();
+    const composite = makeCompositePkTable();
+    const schema1 = makeDatabaseSchema([users, composite]);
+    const schema2 = makeDatabaseSchema([composite, users]);
+    expect(computeDatabaseHash(schema1)).toBe(computeDatabaseHash(schema2));
+  });
+
+  it("produces different hashes for empty vs non-empty schemas", () => {
+    const empty = makeDatabaseSchema([]);
+    const nonEmpty = makeDatabaseSchema([makeUsersTable()]);
+    expect(computeDatabaseHash(empty)).not.toBe(computeDatabaseHash(nonEmpty));
   });
 });

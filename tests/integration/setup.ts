@@ -29,6 +29,7 @@ import { registerCrudRoutes } from "../../src/routes/crud.js";
 import { registerSchemaRoutes } from "../../src/routes/schema.js";
 import { registerAuthHook, extractApiKey, verifyApiKey } from "../../src/auth/api-key.js";
 import type { DatabaseSchema } from "../../src/db/introspector.js";
+import { computeDatabaseHash } from "../../src/db/introspector.js";
 
 export function createMockPool() {
   const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -103,7 +104,8 @@ export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTION
         })());
 
       if (authenticated) {
-        return { ...base, tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
+        const dbHash = computeDatabaseHash(options.dbSchema);
+        return { ...base, databaseHash: dbHash, tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
       }
       return base;
     } catch (err) {

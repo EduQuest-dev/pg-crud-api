@@ -7,7 +7,7 @@ import type { FastifyError } from "fastify";
 import { Pool } from "pg";
 import { config } from "./config.js";
 import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "./build-info.js";
-import { introspectDatabase } from "./db/introspector.js";
+import { introspectDatabase, computeDatabaseHash } from "./db/introspector.js";
 import { registerCrudRoutes } from "./routes/crud.js";
 import { registerSchemaRoutes } from "./routes/schema.js";
 import { registerAuthHook, verifyApiKey, extractApiKey } from "./auth/api-key.js";
@@ -51,6 +51,7 @@ async function main() {
   // ── Introspect database ──
   console.log("\n🔍 Introspecting database...");
   const dbSchema = await introspectDatabase(pool);
+  const dbHash = computeDatabaseHash(dbSchema);
 
   // ── Create Fastify server ──
   const isDev = process.env.NODE_ENV !== "production";
@@ -252,7 +253,7 @@ async function main() {
         })());
 
       if (authenticated) {
-        return { ...base, tables: dbSchema.tables.size, schemas: dbSchema.schemas };
+        return { ...base, databaseHash: dbHash, tables: dbSchema.tables.size, schemas: dbSchema.schemas };
       }
       return base;
     } catch (err) {

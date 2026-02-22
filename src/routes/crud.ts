@@ -114,7 +114,8 @@ function denyPermission(reply: FastifyReply, schema: string, access: string) {
 export async function registerCrudRoutes(
   app: FastifyInstance,
   pool: Pool,
-  dbSchema: DatabaseSchema
+  dbSchema: DatabaseSchema,
+  readPool: Pool = pool,
 ) {
   // ── Meta endpoint: list all available tables ──
   app.get("/api/_meta/tables", async (request) => {
@@ -243,8 +244,8 @@ export async function registerCrudRoutes(
           };
 
           const [dataResult, countResult] = await Promise.all([
-            pool.query(buildSelectQuery(table, opts)),
-            pool.query(buildCountQuery(table, opts)),
+            readPool.query(buildSelectQuery(table, opts)),
+            readPool.query(buildCountQuery(table, opts)),
           ]);
 
           const total = Number.parseInt(countResult.rows[0].total, 10);
@@ -318,7 +319,7 @@ export async function registerCrudRoutes(
               });
             }
 
-            const result = await pool.query(buildSelectByPkQuery(table, pkValues, select));
+            const result = await readPool.query(buildSelectByPkQuery(table, pkValues, select));
 
             if (result.rows.length === 0) {
               return reply.status(404).send({ error: "Record not found" });

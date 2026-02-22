@@ -34,9 +34,18 @@ async function main() {
     statement_timeout: 30_000,
   });
 
+  // Read replica pool (falls back to primary pool when DATABASE_READ_URL is not set)
+  const readPool = config.databaseReadUrl
+    ? new Pool({ connectionString: config.databaseReadUrl, statement_timeout: 30_000 })
+    : pool;
+
   try {
 
   await testDatabaseConnection(pool);
+  if (config.databaseReadUrl) {
+    console.log("\n🔄 Testing read replica connection...");
+    await testDatabaseConnection(readPool);
+  }
 
   // ── Introspect database ──
   console.log("\n🔍 Introspecting database...");
@@ -235,7 +244,10 @@ async function main() {
 
   // ── Register all CRUD routes ──
   console.log("\n🛤️  Registering routes...");
-  await registerCrudRoutes(app, pool, dbSchema);
+  if (config.databaseReadUrl) {
+    console.log("📖 Read replica enabled — GET requests will use the read pool");
+  }
+  await registerCrudRoutes(app, pool, dbSchema, readPool);
   await registerSchemaRoutes(app, dbSchema);
 
   // ── Start server ──
@@ -258,6 +270,7 @@ async function main() {
     console.log("\n🛑 Shutting down...");
     await app.close();
     await pool.end();
+    if (readPool !== pool) await readPool.end();
     process.exit(0);
   };
 
@@ -267,6 +280,7 @@ async function main() {
   } catch (err) {
     console.error("Fatal error during startup:", err);
     await pool.end().catch(() => {});
+    if (readPool !== pool) await readPool.end().catch(() => {});
     process.exit(1);
   }
 }

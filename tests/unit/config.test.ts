@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { parseList, parseIntOrDefault, parseCorsOrigins } from "../../src/config.js";
+import { parseList, parseIntOrDefault, parseCorsOrigins, parseDatabaseUrl } from "../../src/config.js";
 
 describe("parseList", () => {
   it("returns empty array for undefined", () => {
@@ -96,5 +96,27 @@ describe("parseCorsOrigins", () => {
 
   it("returns comma-separated origins as-is", () => {
     expect(parseCorsOrigins("https://a.com,https://b.com")).toBe("https://a.com,https://b.com");
+  });
+});
+
+describe("parseDatabaseUrl", () => {
+  it("returns null for undefined", () => {
+    expect(parseDatabaseUrl(undefined)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(parseDatabaseUrl("")).toBeNull();
+  });
+
+  it("returns null for whitespace-only string", () => {
+    expect(parseDatabaseUrl("   ")).toBeNull();
+  });
+
+  it("returns URL as-is without jdbc: prefix", () => {
+    expect(parseDatabaseUrl("postgresql://read:5432/mydb")).toBe("postgresql://read:5432/mydb");
+  });
+
+  it("strips jdbc: prefix", () => {
+    expect(parseDatabaseUrl("jdbc:postgresql://read:5432/mydb")).toBe("postgresql://read:5432/mydb");
   });
 });

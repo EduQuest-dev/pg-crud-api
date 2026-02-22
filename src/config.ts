@@ -3,6 +3,7 @@ dotenv.config();
 
 export interface AppConfig {
   databaseUrl: string;
+  databaseReadUrl: string | null;
   port: number;
   host: string;
   schemas: string[];
@@ -37,8 +38,14 @@ export function parseCorsOrigins(value: string | undefined): string | boolean {
   return value;
 }
 
+export function parseDatabaseUrl(value: string | undefined): string | null {
+  if (!value || value.trim() === "") return null;
+  return value.replace(/^jdbc:/, "");
+}
+
 export const config: AppConfig = {
   databaseUrl: (process.env.DATABASE_URL || "postgresql://localhost:5432/mydb").replace(/^jdbc:/, ""),
+  databaseReadUrl: parseDatabaseUrl(process.env.DATABASE_READ_URL),
   port: parseIntOrDefault(process.env.PORT, 3000),
   host: process.env.HOST || "0.0.0.0",
   schemas: parseList(process.env.SCHEMAS),

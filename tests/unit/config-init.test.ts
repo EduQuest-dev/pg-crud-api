@@ -21,6 +21,7 @@ describe("config object initialization", () => {
     }));
     // Clear relevant env vars to test fallback branches
     delete process.env.DATABASE_URL;
+    delete process.env.DATABASE_READ_URL;
     delete process.env.PORT;
     delete process.env.HOST;
     delete process.env.SCHEMAS;
@@ -51,6 +52,7 @@ describe("config object initialization", () => {
   it("uses default values when no env vars are set", async () => {
     const { config } = await import("../../src/config.js");
     expect(config.databaseUrl).toBe("postgresql://localhost:5432/mydb");
+    expect(config.databaseReadUrl).toBeNull();
     expect(config.port).toBe(3000);
     expect(config.host).toBe("0.0.0.0");
     expect(config.schemas).toEqual([]);
@@ -76,6 +78,24 @@ describe("config object initialization", () => {
     process.env.DATABASE_URL = "postgresql://db:5432/test";
     const { config } = await import("../../src/config.js");
     expect(config.databaseUrl).toBe("postgresql://db:5432/test");
+  });
+
+  it("reads DATABASE_READ_URL from env", async () => {
+    process.env.DATABASE_READ_URL = "postgresql://replica:5432/mydb";
+    const { config } = await import("../../src/config.js");
+    expect(config.databaseReadUrl).toBe("postgresql://replica:5432/mydb");
+  });
+
+  it("strips jdbc: prefix from DATABASE_READ_URL", async () => {
+    process.env.DATABASE_READ_URL = "jdbc:postgresql://replica:5432/mydb";
+    const { config } = await import("../../src/config.js");
+    expect(config.databaseReadUrl).toBe("postgresql://replica:5432/mydb");
+  });
+
+  it("returns null for empty DATABASE_READ_URL", async () => {
+    process.env.DATABASE_READ_URL = "";
+    const { config } = await import("../../src/config.js");
+    expect(config.databaseReadUrl).toBeNull();
   });
 
   it("reads PORT from env", async () => {

@@ -11,6 +11,7 @@ vi.mock("../../src/config.js", () => ({
     apiSecret: null,
     corsOrigins: true,
     exposeDbErrors: false,
+    databaseReadUrl: null,
   },
 }));
 
@@ -37,6 +38,7 @@ export function createMockPool() {
 interface BuildTestAppOptions {
   dbSchema: DatabaseSchema;
   pool?: Pool;
+  readPool?: Pool;
   authEnabled?: boolean;
   authSecret?: string;
 }
@@ -89,7 +91,7 @@ export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTION
   // Suppress console.log from route registration
   const consoleLog = console.log;
   console.log = () => {};
-  await registerCrudRoutes(app, pool, options.dbSchema);
+  await registerCrudRoutes(app, pool, options.dbSchema, options.readPool ?? pool);
   console.log = consoleLog;
 
   await registerSchemaRoutes(app, options.dbSchema);

@@ -190,7 +190,6 @@ export async function registerSchemaRoutes(
   const tables = Array.from(dbSchema.tables.values()).map((t) =>
     buildAgentTable(t, dbSchema.tables),
   );
-  const cachedSchema = { api, tables };
 
   // Build lookup map for per-table endpoint
   const tableMap = new Map<string, ReturnType<typeof buildAgentTable>>();

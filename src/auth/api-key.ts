@@ -91,6 +91,53 @@ export interface VerifyResult {
   permissions?: SchemaPermissions | null;
 }
 
+interface ParsedKeyData {
+  label: string;
+  permissions: SchemaPermissions | null;
+}
+
+/**
+ * Parse the data portion of a key into label + optional permissions.
+ * Returns null if the data is malformed.
+ */
+function parseKeyData(data: string): ParsedKeyData | null {
+  const colonIndex = data.indexOf(":");
+
+  if (colonIndex <= 0) {
+    // Legacy format: label only (full access)
+    return LABEL_PATTERN.test(data) ? { label: data, permissions: null } : null;
+  }
+
+  // New format: label:base64url_permissions
+  const label = data.slice(0, colonIndex);
+  if (!LABEL_PATTERN.test(label)) return null;
+
+  const permEncoded = data.slice(colonIndex + 1);
+  if (permEncoded.length === 0) return null;
+
+  try {
+    const parsed = JSON.parse(fromBase64url(permEncoded));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    for (const val of Object.values(parsed)) {
+      if (!VALID_PERMISSIONS.has(val as string)) return null;
+    }
+    return { label, permissions: parsed as SchemaPermissions };
+  } catch {
+    return null;
+  }
+}
+
+function verifyHmac(data: string, providedHmac: string, secret: string): boolean {
+  const expectedHmac = createHmac("sha256", secret).update(data).digest("hex");
+  const providedBuffer = Buffer.from(providedHmac, "hex");
+  const expectedBuffer = Buffer.from(expectedHmac, "hex");
+
+  if (providedBuffer.length !== expectedBuffer.length) return false;
+  return timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
 export function verifyApiKey(key: string, secret: string): VerifyResult {
   if (!key.startsWith(KEY_PREFIX)) {
     return { valid: false };
@@ -109,57 +156,16 @@ export function verifyApiKey(key: string, secret: string): VerifyResult {
     return { valid: false };
   }
 
-  // Parse label and optional permissions from data portion
-  const colonIndex = data.indexOf(":");
-  let label: string;
-  let permissions: SchemaPermissions | null = null;
-
-  if (colonIndex > 0) {
-    // New format: label:base64url_permissions
-    label = data.slice(0, colonIndex);
-    const permEncoded = data.slice(colonIndex + 1);
-    if (permEncoded.length === 0) {
-      return { valid: false };
-    }
-    try {
-      const decoded = fromBase64url(permEncoded);
-      const parsed = JSON.parse(decoded);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        return { valid: false };
-      }
-      // Validate all permission values
-      for (const val of Object.values(parsed)) {
-        if (!VALID_PERMISSIONS.has(val as string)) {
-          return { valid: false };
-        }
-      }
-      permissions = parsed as SchemaPermissions;
-    } catch {
-      return { valid: false };
-    }
-  } else {
-    // Legacy format: label only (full access)
-    label = data;
-  }
-
-  if (!LABEL_PATTERN.test(label)) {
+  const parsed = parseKeyData(data);
+  if (!parsed) {
     return { valid: false };
   }
 
-  const expectedHmac = createHmac("sha256", secret).update(data).digest("hex");
-
-  const providedBuffer = Buffer.from(providedHmac, "hex");
-  const expectedBuffer = Buffer.from(expectedHmac, "hex");
-
-  if (providedBuffer.length !== expectedBuffer.length) {
+  if (!verifyHmac(data, providedHmac, secret)) {
     return { valid: false };
   }
 
-  if (!timingSafeEqual(providedBuffer, expectedBuffer)) {
-    return { valid: false };
-  }
-
-  return { valid: true, label, permissions };
+  return { valid: true, label: parsed.label, permissions: parsed.permissions };
 }
 
 // ─── Permission Checking ─────────────────────────────────────────────

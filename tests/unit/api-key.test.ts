@@ -142,6 +142,11 @@ describe("verifyApiKey", () => {
     expect(verifyApiKey("pgcrud_bad label.abcdef", SECRET)).toEqual({ valid: false });
   });
 
+  it("rejects key with invalid label characters in permissions format", () => {
+    const encoded = Buffer.from(JSON.stringify({ public: "r" }), "utf8").toString("base64url");
+    expect(verifyApiKey(`pgcrud_bad label:${encoded}.abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890`, SECRET)).toEqual({ valid: false });
+  });
+
   it("rejects key with truncated HMAC (wrong buffer length)", () => {
     const key = generateApiKey("admin", SECRET);
     const truncated = key.slice(0, key.indexOf(".") + 5); // only 4 hex chars

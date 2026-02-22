@@ -26,6 +26,9 @@ describe("Health Check - GET /api/_health", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe("healthy");
+    expect(body.version).toBe("0.0.0-test");
+    expect(body.buildGitHash).toBe("abc1234");
+    expect(body.buildTimestamp).toBe("2025-01-01T00:00:00.000Z");
     expect(body.tables).toBe(1);
   });
 

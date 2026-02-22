@@ -15,9 +15,16 @@ vi.mock("../../src/config.js", () => ({
   },
 }));
 
+vi.mock("../../src/build-info.js", () => ({
+  BUILD_VERSION: "0.0.0-test",
+  BUILD_GIT_HASH: "abc1234",
+  BUILD_TIMESTAMP: "2025-01-01T00:00:00.000Z",
+}));
+
 import Fastify, { FastifyInstance, FastifyError } from "fastify";
 import { Pool } from "pg";
 import { config } from "../../src/config.js";
+import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "../../src/build-info.js";
 import { registerCrudRoutes } from "../../src/routes/crud.js";
 import { registerSchemaRoutes } from "../../src/routes/schema.js";
 import { registerAuthHook } from "../../src/auth/api-key.js";
@@ -81,7 +88,14 @@ export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTION
         setTimeout(() => reject(new Error("Health check timeout")), 5000)
       );
       await Promise.race([pool.query("SELECT 1"), timeout]);
-      return { status: "healthy", tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
+      return {
+        status: "healthy",
+        version: BUILD_VERSION,
+        buildGitHash: BUILD_GIT_HASH,
+        buildTimestamp: BUILD_TIMESTAMP,
+        tables: options.dbSchema.tables.size,
+        schemas: options.dbSchema.schemas,
+      };
     } catch (err) {
       request.log.error(err, "Health check failed");
       return reply.status(503).send({ status: "unhealthy" });

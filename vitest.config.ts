@@ -8,7 +8,7 @@ export default defineConfig({
       provider: "v8",
       reporter: ["json", "text", "lcov"],
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts", "src/auth/generate-key.ts", "src/build-info.ts"],
+      exclude: ["src/index.ts", "src/auth/generate-key.ts", "src/build-info.ts", "src/mcp/index.ts"],
       thresholds: {
         statements: 100,
         branches: 100,

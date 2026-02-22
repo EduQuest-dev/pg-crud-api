@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { DatabaseSchema, TableInfo, ColumnInfo } from "../db/introspector.js";
 import { config } from "../config.js";
+import { hasAnyPermission } from "../auth/api-key.js";
 
 // ─── Type Mapping ────────────────────────────────────────────────────
 
@@ -189,7 +190,6 @@ export async function registerSchemaRoutes(
   const tables = Array.from(dbSchema.tables.values()).map((t) =>
     buildAgentTable(t, dbSchema.tables),
   );
-  const cachedSchema = { api, tables };
 
   // Build lookup map for per-table endpoint
   const tableMap = new Map<string, ReturnType<typeof buildAgentTable>>();
@@ -201,7 +201,10 @@ export async function registerSchemaRoutes(
 
   app.get("/api/_schema", {
     schema: { hide: true },
-    handler: async () => cachedSchema,
+    handler: async (request) => {
+      const filtered = tables.filter((t) => hasAnyPermission(request.apiKeyPermissions, t.schema));
+      return { api, tables: filtered };
+    },
   });
 
   app.get("/api/_schema/:table", {
@@ -209,7 +212,7 @@ export async function registerSchemaRoutes(
     handler: async (request, reply) => {
       const { table: routePath } = request.params as { table: string };
       const tableSchema = tableMap.get(routePath);
-      if (!tableSchema) {
+      if (!tableSchema || !hasAnyPermission(request.apiKeyPermissions, tableSchema.schema)) {
         return reply.status(404).send({ error: `Table '${routePath}' not found` });
       }
       return { api, table: tableSchema };

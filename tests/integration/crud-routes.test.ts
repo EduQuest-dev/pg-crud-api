@@ -641,3 +641,113 @@ describe("CRUD Routes - Non-public schema", () => {
   });
 });
 
+// ── Read/Write Pool Separation ──────────────────────────────────────
+
+describe("CRUD Routes - Read/Write Pool Separation", () => {
+  let app: FastifyInstance;
+  let writePool: ReturnType<typeof createMockPool>;
+  let readPool: ReturnType<typeof createMockPool>;
+  const users = makeUsersTable();
+  const dbSchema = makeDatabaseSchema([users]);
+
+  beforeAll(async () => {
+    writePool = createMockPool();
+    readPool = createMockPool();
+    app = await buildTestApp({ dbSchema, pool: writePool as any, readPool: readPool as any });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    vi.mocked(writePool.query).mockReset();
+    vi.mocked(readPool.query).mockReset();
+    vi.mocked(writePool.query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
+    vi.mocked(readPool.query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
+  });
+
+  it("LIST uses readPool, not writePool", async () => {
+    vi.mocked(readPool.query)
+      .mockResolvedValueOnce({ rows: [{ id: 1, name: "Alice", email: "a@b.com", active: true }], rowCount: 1 } as any)
+      .mockResolvedValueOnce({ rows: [{ total: "1" }], rowCount: 1 } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/users" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(readPool.query)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(writePool.query)).not.toHaveBeenCalled();
+  });
+
+  it("GET by PK uses readPool, not writePool", async () => {
+    vi.mocked(readPool.query).mockResolvedValueOnce({
+      rows: [{ id: 1, name: "Alice", email: "a@b.com", active: true }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/users/1" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(readPool.query)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(writePool.query)).not.toHaveBeenCalled();
+  });
+
+  it("POST uses writePool, not readPool", async () => {
+    vi.mocked(writePool.query).mockResolvedValueOnce({
+      rows: [{ id: 1, name: "Alice", email: "a@b.com", active: true }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/users",
+      payload: { name: "Alice", email: "a@b.com" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(vi.mocked(writePool.query)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readPool.query)).not.toHaveBeenCalled();
+  });
+
+  it("PUT uses writePool, not readPool", async () => {
+    vi.mocked(writePool.query).mockResolvedValueOnce({
+      rows: [{ id: 1, name: "Updated", email: "a@b.com", active: true }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/users/1",
+      payload: { name: "Updated", email: "a@b.com", active: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(writePool.query)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readPool.query)).not.toHaveBeenCalled();
+  });
+
+  it("PATCH uses writePool, not readPool", async () => {
+    vi.mocked(writePool.query).mockResolvedValueOnce({
+      rows: [{ id: 1, name: "Patched", email: "a@b.com", active: true }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/users/1",
+      payload: { name: "Patched" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(writePool.query)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readPool.query)).not.toHaveBeenCalled();
+  });
+
+  it("DELETE uses writePool, not readPool", async () => {
+    vi.mocked(writePool.query).mockResolvedValueOnce({
+      rows: [{ id: 1, name: "Alice", email: "a@b.com", active: true }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({ method: "DELETE", url: "/api/users/1" });
+    expect(res.statusCode).toBe(200);
+    expect(vi.mocked(writePool.query)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readPool.query)).not.toHaveBeenCalled();
+  });
+});
+

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { config, SYSTEM_SCHEMAS } from "../config.js";
 
@@ -203,6 +204,61 @@ function warnTableIssues(tables: Map<string, TableInfo>): void {
       }
     }
   }
+}
+
+// ─── Database Hash ───────────────────────────────────────────────────
+
+/**
+ * Compute a deterministic SHA-256 hash of the full database schema.
+ * Useful for detecting schema changes between deployments / restarts.
+ * The hash covers schemas, tables, columns (name, type, nullability,
+ * defaults, max length, ordinal position), primary keys, and foreign keys.
+ */
+export function computeDatabaseHash(schema: DatabaseSchema): string {
+  const canonical: unknown[] = [];
+
+  // Sort schemas for determinism
+  const sortedSchemas = [...schema.schemas].sort((a, b) => a.localeCompare(b));
+  canonical.push(sortedSchemas);
+
+  // Sort tables by fqn and serialize each table's structure
+  const sortedTables = Array.from(schema.tables.values()).sort((a, b) =>
+    a.fqn.localeCompare(b.fqn)
+  );
+
+  for (const table of sortedTables) {
+    canonical.push({
+      schema: table.schema,
+      name: table.name,
+      fqn: table.fqn,
+      columns: table.columns
+        .slice()
+        .sort((a, b) => a.ordinalPosition - b.ordinalPosition)
+        .map((c) => ({
+          name: c.name,
+          dataType: c.dataType,
+          udtName: c.udtName,
+          isNullable: c.isNullable,
+          hasDefault: c.hasDefault,
+          defaultValue: c.defaultValue,
+          maxLength: c.maxLength,
+          ordinalPosition: c.ordinalPosition,
+        })),
+      primaryKeys: [...table.primaryKeys].sort((a, b) => a.localeCompare(b)),
+      foreignKeys: table.foreignKeys
+        .slice()
+        .sort((a, b) => a.constraintName.localeCompare(b.constraintName))
+        .map((fk) => ({
+          constraintName: fk.constraintName,
+          column: fk.column,
+          refSchema: fk.refSchema,
+          refTable: fk.refTable,
+          refColumn: fk.refColumn,
+        })),
+    });
+  }
+
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 // ─── Introspect ──────────────────────────────────────────────────────

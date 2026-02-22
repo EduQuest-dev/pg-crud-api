@@ -6,10 +6,11 @@ import addFormats from "ajv-formats";
 import type { FastifyError } from "fastify";
 import { Pool } from "pg";
 import { config } from "./config.js";
-import { introspectDatabase } from "./db/introspector.js";
+import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "./build-info.js";
+import { introspectDatabase, computeDatabaseHash } from "./db/introspector.js";
 import { registerCrudRoutes } from "./routes/crud.js";
 import { registerSchemaRoutes } from "./routes/schema.js";
-import { registerAuthHook, verifyApiKey } from "./auth/api-key.js";
+import { registerAuthHook, verifyApiKey, extractApiKey } from "./auth/api-key.js";
 
 async function testDatabaseConnection(pool: Pool): Promise<void> {
   let client;
@@ -50,6 +51,7 @@ async function main() {
   // ── Introspect database ──
   console.log("\n🔍 Introspecting database...");
   const dbSchema = await introspectDatabase(pool);
+  const dbHash = computeDatabaseHash(dbSchema);
 
   // ── Create Fastify server ──
   const isDev = process.env.NODE_ENV !== "production";
@@ -119,8 +121,8 @@ async function main() {
         openapi: "3.0.0",
         info: {
           title: "Auto-Generated CRUD API",
-          description: `Dynamically generated REST API for PostgreSQL database.\n\nSchemas: ${dbSchema.schemas.join(", ")}\nTables: ${dbSchema.tables.size}`,
-          version: "1.0.0",
+          description: `Dynamically generated REST API for PostgreSQL database.\n\nSchemas: ${dbSchema.schemas.join(", ")}\nTables: ${dbSchema.tables.size}\nBuild: ${BUILD_VERSION}+${BUILD_GIT_HASH} (${BUILD_TIMESTAMP})`,
+          version: BUILD_VERSION,
         },
         tags: Array.from(dbSchema.tables.values()).map((t) => ({
           name: t.schema === "public" ? t.name : `${t.schema}.${t.name}`,
@@ -216,7 +218,7 @@ async function main() {
                 info: {
                   title: "Auto-Generated CRUD API",
                   description: "Authenticate using the **Authorize** button above to view API endpoints.",
-                  version: "1.0.0",
+                  version: BUILD_VERSION,
                 },
                 paths: {},
                 components: swaggerObject.components || {},
@@ -235,7 +237,25 @@ async function main() {
         setTimeout(() => reject(new Error("Health check timeout")), 5000)
       );
       await Promise.race([pool.query("SELECT 1"), timeout]);
-      return { status: "healthy", tables: dbSchema.tables.size, schemas: dbSchema.schemas };
+
+      const base = {
+        status: "healthy" as const,
+        version: BUILD_VERSION,
+        buildGitHash: BUILD_GIT_HASH,
+        buildTimestamp: BUILD_TIMESTAMP,
+      };
+
+      // Only expose table/schema details to authenticated requests
+      const authenticated = !config.apiKeysEnabled
+        || (config.apiSecret && (() => {
+          const key = extractApiKey(request);
+          return key ? verifyApiKey(key, config.apiSecret!).valid : false;
+        })());
+
+      if (authenticated) {
+        return { ...base, databaseHash: dbHash, tables: dbSchema.tables.size, schemas: dbSchema.schemas };
+      }
+      return base;
     } catch (err) {
       request.log.error(err, "Health check failed");
       return reply.status(503).send({ status: "unhealthy" });

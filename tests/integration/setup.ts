@@ -15,13 +15,21 @@ vi.mock("../../src/config.js", () => ({
   },
 }));
 
+vi.mock("../../src/build-info.js", () => ({
+  BUILD_VERSION: "0.0.0-test",
+  BUILD_GIT_HASH: "abc1234",
+  BUILD_TIMESTAMP: "2025-01-01T00:00:00.000Z",
+}));
+
 import Fastify, { FastifyInstance, FastifyError } from "fastify";
 import { Pool } from "pg";
 import { config } from "../../src/config.js";
+import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "../../src/build-info.js";
 import { registerCrudRoutes } from "../../src/routes/crud.js";
 import { registerSchemaRoutes } from "../../src/routes/schema.js";
-import { registerAuthHook } from "../../src/auth/api-key.js";
+import { registerAuthHook, extractApiKey, verifyApiKey } from "../../src/auth/api-key.js";
 import type { DatabaseSchema } from "../../src/db/introspector.js";
+import { computeDatabaseHash } from "../../src/db/introspector.js";
 
 export function createMockPool() {
   const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -81,7 +89,25 @@ export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTION
         setTimeout(() => reject(new Error("Health check timeout")), 5000)
       );
       await Promise.race([pool.query("SELECT 1"), timeout]);
-      return { status: "healthy", tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
+
+      const base = {
+        status: "healthy" as const,
+        version: BUILD_VERSION,
+        buildGitHash: BUILD_GIT_HASH,
+        buildTimestamp: BUILD_TIMESTAMP,
+      };
+
+      const authenticated = !options.authEnabled
+        || (options.authSecret && (() => {
+          const key = extractApiKey(request);
+          return key ? verifyApiKey(key, options.authSecret!).valid : false;
+        })());
+
+      if (authenticated) {
+        const dbHash = computeDatabaseHash(options.dbSchema);
+        return { ...base, databaseHash: dbHash, tables: options.dbSchema.tables.size, schemas: options.dbSchema.schemas };
+      }
+      return base;
     } catch (err) {
       request.log.error(err, "Health check failed");
       return reply.status(503).send({ status: "unhealthy" });

@@ -226,7 +226,7 @@ export function parsePermissionsString(input: string): SchemaPermissions {
 
 // ─── Auth Hook ───────────────────────────────────────────────────────
 
-function extractApiKey(request: FastifyRequest): string | null {
+export function extractApiKey(request: FastifyRequest): string | null {
   const authHeader = request.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     return authHeader.slice(7).trim();

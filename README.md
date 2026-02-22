@@ -42,70 +42,109 @@ On startup, the API:
 
 ## Authentication
 
-API key authentication is enabled by default. Keys are derived from a single `API_SECRET` using HMAC-SHA256 — no database storage required.
+### Overview
+
+Authentication is **stateless** and **database-free**. A single `API_SECRET` environment variable is the root of trust. API keys are derived from it using HMAC-SHA256 — there is no keys table, no token store, and no revocation list. Verification recomputes the HMAC and compares it in constant time (`timingSafeEqual`), so validating a key is a pure CPU operation with zero I/O.
+
+Authentication is enabled by default (`API_KEYS_ENABLED=true`). The server **refuses to start** if auth is enabled but `API_SECRET` is not set.
+
+### How Keys Work
+
+Every key follows one of two formats:
+
+| Format | Structure | Access level |
+|--------|-----------|--------------|
+| **Legacy** (full access) | `pgcrud_{label}.{hmac_hex}` | Unrestricted read/write on all schemas |
+| **Permission-scoped** | `pgcrud_{label}:{base64url_json}.{hmac_hex}` | Restricted to schemas and operations encoded in the key |
+
+The `label` is a human-chosen identifier (e.g., `admin`, `service-a`, `readonly-backend`). Different labels produce different keys, all verifiable with the same secret.
+
+**How derivation works:**
+1. For legacy keys, the HMAC input is just the label (e.g., `admin`).
+2. For permission-scoped keys, the permissions object (e.g., `{"public":"rw","reporting":"r"}`) is JSON-serialized, base64url-encoded, and appended: `admin:eyJwdWJsaWMiOiJydyJ9`. The HMAC covers this entire string, making both label and permissions tamper-proof.
+3. The HMAC is computed as `HMAC-SHA256(data, API_SECRET)` and hex-encoded.
+4. The final key is `pgcrud_{data}.{hmac_hex}`.
+
+**Verification** extracts the data and HMAC from the key, recomputes the expected HMAC from the data + `API_SECRET`, and compares using `timingSafeEqual`. Invalid or tampered keys are rejected with `401 Unauthorized`.
 
 ### Generating Keys
 
 ```bash
-# Full-access key
+# Full-access key (legacy format)
 npm run generate-key -- <API_SECRET> <label>
 
 # Example:
 npm run generate-key -- my-secret-value admin
-# Output: pgcrud_admin.bccd91ad74b9c9f3310b044deb72712fc411d25eb7de78be42f5e0bf142ee7e7
-```
+# → pgcrud_admin.bccd91ad74b9c9f3310b044deb72712fc411d25eb7de78be42f5e0bf142ee7e7
 
-The `label` is a human-readable identifier (e.g., `admin`, `service-a`, `readonly-backend`). Different labels produce different keys, all verifiable with the same secret.
+# Permission-scoped key
+npm run generate-key -- my-secret admin --schemas public:rw,reporting:r
+```
 
 ### Schema-Scoped Permissions
 
-Keys can be scoped to specific schemas with read/write granularity:
+Keys can be scoped to specific PostgreSQL schemas with per-schema read/write granularity:
 
 ```bash
-# Read-write access to public schema, read-only access to reporting schema
+# Read-write on public, read-only on reporting
 npm run generate-key -- my-secret admin --schemas public:rw,reporting:r
 
-# Read-only access to all schemas
+# Read-only across all schemas (wildcard)
 npm run generate-key -- my-secret readonly --schemas '*:r'
 
-# Write-only access to public schema
+# Write-only on public
 npm run generate-key -- my-secret writer --schemas public:w
 ```
 
-**Permission values:** `r` (read-only), `w` (write-only), `rw` (read and write). Use `*` as the schema name for wildcard access across all schemas. Legacy keys (generated without `--schemas`) retain full access.
+**Permission values:**
 
-Permissions are cryptographically embedded in the key using HMAC-SHA256 — they cannot be tampered with or escalated without the `API_SECRET`.
+| Value | Meaning | Allowed HTTP methods |
+|-------|---------|---------------------|
+| `r`   | Read-only | `GET` |
+| `w`   | Write-only | `POST`, `PUT`, `PATCH`, `DELETE` |
+| `rw`  | Full access | All methods |
 
-**Enforcement:**
-- `GET` requests require `r` permission on the table's schema
-- `POST`, `PUT`, `PATCH`, `DELETE` require `w` permission
-- Meta and schema endpoints filter tables to only show schemas the key can access
-- Denied requests receive `403 Forbidden`
+Use `*` as the schema name for wildcard access across all schemas. When both a specific schema entry and `*` exist, the specific entry takes precedence.
 
-### Using Keys
+Permissions are cryptographically embedded in the key — they **cannot be tampered with or escalated** without the `API_SECRET`. Any modification to the permissions portion invalidates the HMAC and the key is rejected.
+
+### Permission Enforcement
+
+| Request type | Required permission | Denied response |
+|--------------|-------------------|-----------------|
+| `GET` (list, get by PK) | `r` on the table's schema | `403 Forbidden` |
+| `POST`, `PUT`, `PATCH`, `DELETE` | `w` on the table's schema | `403 Forbidden` |
+| `GET /api/_meta/tables` | Filters results to accessible schemas only | — |
+| `GET /api/_schema` | Filters results to accessible schemas only | — |
+
+Legacy keys (generated without `--schemas`) bypass all permission checks and have full access.
+
+### Sending Keys
 
 Pass the key via either header:
 
 ```bash
-# Authorization header
+# Authorization header (recommended)
 curl http://localhost:3000/api/users \
   -H "Authorization: Bearer pgcrud_admin.bccd91..."
 
-# X-API-Key header
+# X-API-Key header (alternative)
 curl http://localhost:3000/api/users \
   -H "X-API-Key: pgcrud_admin.bccd91..."
 ```
 
+Both headers are checked in order: `Authorization: Bearer` first, then `X-API-Key`. The first valid key found is used.
+
 ### Public Endpoints
 
-These endpoints do not require authentication:
+These endpoints never require authentication:
 
-- `GET /api/_health` — Health check
-- `GET /docs/*` — Swagger UI and OpenAPI spec
+- **`GET /api/_health`** — Health check (returns build info publicly; table/schema/database details only for authenticated callers — see [Health Check](#health-check))
+- **`GET /docs/*`** — Swagger UI and OpenAPI spec
 
 ### Disabling Auth
 
-Set `API_KEYS_ENABLED=false` in `.env` to disable authentication entirely (useful for development).
+Set `API_KEYS_ENABLED=false` in `.env` to disable authentication entirely. All endpoints become publicly accessible. **This is intended for development only** — the server logs a warning when auth is disabled.
 
 ---
 
@@ -126,11 +165,47 @@ For each table, the following endpoints are created:
 
 | Method | Path                          | Description                              |
 |--------|-------------------------------|------------------------------------------|
-| `GET`  | `/api/_health`                | Health check                             |
+| `GET`  | `/api/_health`                | Health check ([details below](#health-check)) |
 | `GET`  | `/api/_meta/tables`           | List all available tables                |
 | `GET`  | `/api/_meta/tables/:table`    | Table schema details                     |
 | `GET`  | `/api/_schema`                | Full API schema (for LLM agents / tools) |
 | `GET`  | `/api/_schema/:table`         | Single table schema                      |
+
+### Health Check
+
+The health endpoint is always publicly accessible (no authentication required), but its response varies based on whether the caller provides a valid API key:
+
+**Unauthenticated** (or auth disabled = full response):
+```jsonc
+// GET /api/_health
+{
+  "status": "healthy",
+  "version": "1.2.0",
+  "buildGitHash": "a1b2c3d",
+  "buildTimestamp": "2025-06-15T12:00:00.000Z"
+}
+```
+
+**Authenticated** (valid API key provided):
+```jsonc
+// GET /api/_health  (with Authorization: Bearer <key>)
+{
+  "status": "healthy",
+  "version": "1.2.0",
+  "buildGitHash": "a1b2c3d",
+  "buildTimestamp": "2025-06-15T12:00:00.000Z",
+  "databaseHash": "e3b0c44298fc1c149afbf4c8996fb924...",  // SHA-256 of full schema
+  "tables": 12,
+  "schemas": ["public", "reporting"]
+}
+```
+
+When auth is **disabled** (`API_KEYS_ENABLED=false`), the full response (including `databaseHash`, `tables`, and `schemas`) is always returned.
+
+The `databaseHash` is a deterministic SHA-256 hash of the entire introspected database structure (schemas, tables, columns, types, primary keys, foreign keys). It changes whenever the database schema changes, making it useful for:
+- Detecting schema drift between environments
+- Cache invalidation for schema-aware clients
+- Verifying deployment consistency
 
 ### Schema Routing
 

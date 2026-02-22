@@ -579,12 +579,17 @@ function registerPrompts (
       }
       operations.push(`- CREATE: create_record with table="${routePath}" and data={...}`)
       if (hasPk) {
-        operations.push(`- UPDATE: update_record with table="${routePath}", id="<pk_value>", data={...}`)
-        operations.push(`- DELETE: delete_record with table="${routePath}" and id="<pk_value>"`)
+        operations.push(
+          `- UPDATE: update_record with table="${routePath}", id="<pk_value>", data={...}`,
+          `- DELETE: delete_record with table="${routePath}" and id="<pk_value>"`
+        )
       }
 
-      const fkInfo = table.foreignKeys.length > 0
-        ? `\nForeign keys:\n${table.foreignKeys.map((fk) => `  - ${fk.column} → ${fk.refSchema}.${fk.refTable}.${fk.refColumn}`).join('\n')}`
+      const fkLines = table.foreignKeys.map((fk) =>
+        `  - ${fk.column} → ${fk.refSchema}.${fk.refTable}.${fk.refColumn}`
+      )
+      const fkInfo = fkLines.length > 0
+        ? `\nForeign keys:\n${fkLines.join('\n')}`
         : ''
 
       const searchInfo = searchableCols.length > 0

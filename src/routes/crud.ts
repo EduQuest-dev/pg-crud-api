@@ -111,6 +111,22 @@ function denyPermission (reply: FastifyReply, schema: string, access: string) {
   })
 }
 
+function parseQueryFilters (query: Record<string, unknown>): Record<string, unknown> | undefined {
+  const filters: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(query)) {
+    if (key.startsWith('filter.')) {
+      filters[key.slice(7)] = value
+    }
+  }
+  return Object.keys(filters).length > 0 ? filters : undefined
+}
+
+function getDefaultSearchColumns (table: TableInfo): string[] {
+  return table.columns
+    .filter((c) => ['varchar', 'text', 'char', 'name'].includes(c.udtName))
+    .map((c) => c.name)
+}
+
 /**
  * Parse PK from request params, or send a 400 response and return null.
  */
@@ -249,14 +265,6 @@ export async function registerCrudRoutes (
         try {
           const query = request.query as Record<string, unknown>
 
-          // Extract filter.* params
-          const filters: Record<string, unknown> = {}
-          for (const [key, value] of Object.entries(query)) {
-            if (key.startsWith('filter.')) {
-              filters[key.slice(7)] = value
-            }
-          }
-
           const opts: ListOptions = {
             /* c8 ignore next */
             page: Number(query.page) || 1,
@@ -268,8 +276,8 @@ export async function registerCrudRoutes (
             search: query.search as string,
             searchColumns: query.searchColumns
               ? parseCommaSeparated(query.searchColumns)
-              : table.columns.filter((c) => ['varchar', 'text', 'char', 'name'].includes(c.udtName)).map((c) => c.name),
-            filters: Object.keys(filters).length > 0 ? filters : undefined,
+              : getDefaultSearchColumns(table),
+            filters: parseQueryFilters(query),
           }
 
           const [dataResult, countResult] = await Promise.all([

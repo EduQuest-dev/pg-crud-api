@@ -17,6 +17,37 @@ console.warn = (...args: unknown[]) => originalWarn.call(console, ...args)
 console.log = (...args: unknown[]) => process.stderr.write(args.join(' ') + '\n')
 console.warn = (...args: unknown[]) => process.stderr.write(args.join(' ') + '\n')
 
+function resolvePermissions (): SchemaPermissions | null {
+  if (!config.apiKeysEnabled) {
+    console.log('API key authentication is disabled — full access granted')
+    return null
+  }
+
+  const mcpApiKey = process.env.MCP_API_KEY
+  if (!mcpApiKey) {
+    console.error(
+      'Error: API_KEYS_ENABLED is true but MCP_API_KEY is not set.\n' +
+      'Set MCP_API_KEY to a valid API key, or disable auth with API_KEYS_ENABLED=false'
+    )
+    process.exit(1)
+  }
+
+  if (!config.apiSecret) {
+    console.error('Error: API_KEYS_ENABLED is true but API_SECRET is not set.')
+    process.exit(1)
+  }
+
+  const result = verifyApiKey(mcpApiKey, config.apiSecret)
+  if (!result.valid) {
+    console.error('Error: MCP_API_KEY is invalid.')
+    process.exit(1)
+  }
+
+  const permissions = result.permissions ?? null
+  console.log(`Authenticated as "${result.label}" (${permissions ? 'scoped permissions' : 'full access'})`)
+  return permissions
+}
+
 async function main (): Promise<void> {
   // ── Database connection ──
   const pool = new Pool({
@@ -47,35 +78,7 @@ async function main (): Promise<void> {
     const dbSchema = await introspectDatabase(pool)
 
     // ── Resolve API key permissions ──
-    let permissions: SchemaPermissions | null = null
-
-    if (config.apiKeysEnabled) {
-      const mcpApiKey = process.env.MCP_API_KEY
-      if (!mcpApiKey) {
-        console.error(
-          'Error: API_KEYS_ENABLED is true but MCP_API_KEY is not set.\n' +
-          'Set MCP_API_KEY to a valid API key, or disable auth with API_KEYS_ENABLED=false'
-        )
-        process.exit(1)
-      }
-
-      if (!config.apiSecret) {
-        console.error('Error: API_KEYS_ENABLED is true but API_SECRET is not set.')
-        process.exit(1)
-      }
-
-      const result = verifyApiKey(mcpApiKey, config.apiSecret)
-      if (!result.valid) {
-        console.error('Error: MCP_API_KEY is invalid.')
-        process.exit(1)
-      }
-
-      permissions = result.permissions ?? null
-      console.log(`Authenticated as "${result.label}" (${permissions ? 'scoped permissions' : 'full access'})`)
-    }
-    if (!config.apiKeysEnabled) {
-      console.log('API key authentication is disabled — full access granted')
-    }
+    const permissions = resolvePermissions()
 
     // ── Create and start MCP server ──
     const server = createMcpServer({ pool, readPool, dbSchema, permissions })

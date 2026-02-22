@@ -203,6 +203,54 @@ describe("verifyApiKey", () => {
     expect(verifyApiKey(`pgcrud_${data}.${hmac}`, SECRET)).toEqual({ valid: false });
   });
 
+  it("rejects permission stripping attack (removing permissions to get full access)", () => {
+    // Attacker has a scoped key: pgcrud_svc:{perms}.{hmac}
+    // They try to strip permissions to make a legacy key: pgcrud_svc.{hmac}
+    const scopedKey = generateApiKey("svc", SECRET, { public: "r" });
+    const dotIdx = scopedKey.lastIndexOf(".");
+    const hmac = scopedKey.slice(dotIdx + 1);
+    // Attempt 1: reuse the same HMAC with just the label
+    const stripped = `pgcrud_svc.${hmac}`;
+    expect(verifyApiKey(stripped, SECRET)).toEqual({ valid: false });
+  });
+
+  it("rejects permission escalation (adding schemas not in original key)", () => {
+    // Attacker has key for public:r, tries to add reporting:rw
+    const key = generateApiKey("svc", SECRET, { public: "r" });
+    const colonIdx = key.indexOf(":");
+    const dotIdx = key.lastIndexOf(".");
+    const escalated = key.slice(0, colonIdx + 1) +
+      Buffer.from(JSON.stringify({ public: "r", reporting: "rw" }), "utf8").toString("base64url") +
+      key.slice(dotIdx);
+    expect(verifyApiKey(escalated, SECRET)).toEqual({ valid: false });
+  });
+
+  it("rejects permission upgrade attack (r → rw)", () => {
+    const key = generateApiKey("svc", SECRET, { public: "r" });
+    const colonIdx = key.indexOf(":");
+    const dotIdx = key.lastIndexOf(".");
+    const upgraded = key.slice(0, colonIdx + 1) +
+      Buffer.from(JSON.stringify({ public: "rw" }), "utf8").toString("base64url") +
+      key.slice(dotIdx);
+    expect(verifyApiKey(upgraded, SECRET)).toEqual({ valid: false });
+  });
+
+  it("cannot forge a valid key without the secret", () => {
+    // Attacker crafts a key with their own HMAC using a guessed secret
+    const { createHmac } = require("node:crypto");
+    const data = "admin";
+    const fakeHmac = createHmac("sha256", "wrong-secret").update(data).digest("hex");
+    expect(verifyApiKey(`pgcrud_${data}.${fakeHmac}`, SECRET)).toEqual({ valid: false });
+  });
+
+  it("cannot forge a scoped key without the secret", () => {
+    const { createHmac } = require("node:crypto");
+    const perms = Buffer.from(JSON.stringify({ "*": "rw" }), "utf8").toString("base64url");
+    const data = `admin:${perms}`;
+    const fakeHmac = createHmac("sha256", "wrong-secret").update(data).digest("hex");
+    expect(verifyApiKey(`pgcrud_${data}.${fakeHmac}`, SECRET)).toEqual({ valid: false });
+  });
+
   it("rejects key with empty HMAC after dot", () => {
     expect(verifyApiKey("pgcrud_admin.", SECRET)).toEqual({ valid: false });
   });

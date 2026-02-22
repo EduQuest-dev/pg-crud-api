@@ -11,7 +11,7 @@ vi.mock("../../src/config.js", () => ({
 
 import { introspectDatabase, computeDatabaseHash } from "../../src/db/introspector.js";
 import { config } from "../../src/config.js";
-import { makeDatabaseSchema, makeUsersTable, makeCompositePkTable, makeTableWithForeignKeys } from "../fixtures/tables.js";
+import { makeDatabaseSchema, makeUsersTable, makeCompositePkTable, makeTableWithForeignKeys, makeColumn } from "../fixtures/tables.js";
 
 // ─── Mock Pool Helpers ──────────────────────────────────────────────
 
@@ -498,5 +498,32 @@ describe("computeDatabaseHash", () => {
     const empty = makeDatabaseSchema([]);
     const nonEmpty = makeDatabaseSchema([makeUsersTable()]);
     expect(computeDatabaseHash(empty)).not.toBe(computeDatabaseHash(nonEmpty));
+  });
+
+  it("sorts foreign keys deterministically by constraint name", () => {
+    const tableWithMultipleFks = {
+      schema: "public",
+      name: "payments",
+      fqn: '"public"."payments"',
+      routePath: "payments",
+      primaryKeys: ["id"],
+      columns: [
+        makeColumn({ name: "id", dataType: "integer", udtName: "int4", ordinalPosition: 1 }),
+        makeColumn({ name: "user_id", dataType: "integer", udtName: "int4", ordinalPosition: 2 }),
+        makeColumn({ name: "order_id", dataType: "integer", udtName: "int4", ordinalPosition: 3 }),
+      ],
+      foreignKeys: [
+        { constraintName: "payments_user_id_fkey", column: "user_id", refSchema: "public", refTable: "users", refColumn: "id" },
+        { constraintName: "payments_order_id_fkey", column: "order_id", refSchema: "public", refTable: "orders", refColumn: "id" },
+      ],
+    };
+    const tableWithFksReversed = {
+      ...tableWithMultipleFks,
+      foreignKeys: [...tableWithMultipleFks.foreignKeys].reverse(),
+    };
+
+    const schema1 = makeDatabaseSchema([tableWithMultipleFks]);
+    const schema2 = makeDatabaseSchema([tableWithFksReversed]);
+    expect(computeDatabaseHash(schema1)).toBe(computeDatabaseHash(schema2));
   });
 });

@@ -14,6 +14,7 @@ import {
 } from "../db/query-builder.js";
 import { config } from "../config.js";
 import { handleDbError } from "../errors/pg-errors.js";
+import { hasPermission, hasAnyPermission } from "../auth/api-key.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -101,6 +102,13 @@ export function handleRouteError(error: unknown, reply: FastifyReply) {
   return handleDbError(error, reply);
 }
 
+function denyPermission(reply: FastifyReply, schema: string, access: string) {
+  return reply.status(403).send({
+    error: "Forbidden",
+    message: `API key does not have ${access} permission on schema "${schema}".`,
+  });
+}
+
 // ─── Route Registration ──────────────────────────────────────────────
 
 export async function registerCrudRoutes(
@@ -109,18 +117,20 @@ export async function registerCrudRoutes(
   dbSchema: DatabaseSchema
 ) {
   // ── Meta endpoint: list all available tables ──
-  app.get("/api/_meta/tables", async () => {
-    const tables = Array.from(dbSchema.tables.values()).map((t) => ({
-      schema: t.schema,
-      table: t.name,
-      path: `/api/${t.routePath}`,
-      primaryKeys: t.primaryKeys,
-      columnCount: t.columns.length,
-      foreignKeys: t.foreignKeys.map((fk) => ({
-        column: fk.column,
-        references: `${fk.refSchema}.${fk.refTable}.${fk.refColumn}`,
-      })),
-    }));
+  app.get("/api/_meta/tables", async (request) => {
+    const tables = Array.from(dbSchema.tables.values())
+      .filter((t) => hasAnyPermission(request.apiKeyPermissions, t.schema))
+      .map((t) => ({
+        schema: t.schema,
+        table: t.name,
+        path: `/api/${t.routePath}`,
+        primaryKeys: t.primaryKeys,
+        columnCount: t.columns.length,
+        foreignKeys: t.foreignKeys.map((fk) => ({
+          column: fk.column,
+          references: `${fk.refSchema}.${fk.refTable}.${fk.refColumn}`,
+        })),
+      }));
     return { count: tables.length, tables };
   });
 
@@ -129,7 +139,7 @@ export async function registerCrudRoutes(
     const { table: routePath } = request.params as { table: string };
     const tableInfo = findTable(dbSchema, routePath);
 
-    if (!tableInfo) {
+    if (!tableInfo || !hasAnyPermission(request.apiKeyPermissions, tableInfo.schema)) {
       return reply.status(404).send({ error: `Table '${routePath}' not found` });
     }
 
@@ -199,9 +209,13 @@ export async function registerCrudRoutes(
           },
           400: errorSchema("Bad request"),
           401: errorSchema("Unauthorized"),
+          403: errorSchema("Forbidden"),
         },
       },
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!hasPermission(request.apiKeyPermissions, table.schema, "r")) {
+          return denyPermission(reply, table.schema, "read");
+        }
         try {
           const query = request.query as Record<string, unknown>;
 
@@ -284,10 +298,14 @@ export async function registerCrudRoutes(
           response: {
             200: { description: "Record found", ...rowSchema },
             401: errorSchema("Unauthorized"),
+            403: errorSchema("Forbidden"),
             404: errorSchema("Record not found"),
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
+          if (!hasPermission(request.apiKeyPermissions, table.schema, "r")) {
+            return denyPermission(reply, table.schema, "read");
+          }
           try {
             const params = request.params as { id: string };
             const query = request.query as Record<string, string>;
@@ -341,10 +359,14 @@ export async function registerCrudRoutes(
           },
           400: errorSchema("Bad request"),
           401: errorSchema("Unauthorized"),
+          403: errorSchema("Forbidden"),
           409: errorSchema("Conflict — duplicate key"),
         },
       },
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
+          return denyPermission(reply, table.schema, "write");
+        }
         try {
           const body = request.body;
 
@@ -373,11 +395,15 @@ export async function registerCrudRoutes(
             200: { description: "Record updated", ...rowSchema },
             400: errorSchema("Bad request"),
             401: errorSchema("Unauthorized"),
+            403: errorSchema("Forbidden"),
             404: errorSchema("Record not found"),
             409: errorSchema("Conflict — duplicate key"),
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
+          if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
+            return denyPermission(reply, table.schema, "write");
+          }
           try {
             const params = request.params as { id: string };
             const pkValues = buildPkParams(table, params);
@@ -413,11 +439,15 @@ export async function registerCrudRoutes(
             200: { description: "Record updated", ...rowSchema },
             400: errorSchema("Bad request"),
             401: errorSchema("Unauthorized"),
+            403: errorSchema("Forbidden"),
             404: errorSchema("Record not found"),
             409: errorSchema("Conflict — duplicate key"),
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
+          if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
+            return denyPermission(reply, table.schema, "write");
+          }
           try {
             const params = request.params as { id: string };
             const pkValues = buildPkParams(table, params);
@@ -458,10 +488,14 @@ export async function registerCrudRoutes(
               },
             },
             401: errorSchema("Unauthorized"),
+            403: errorSchema("Forbidden"),
             404: errorSchema("Record not found"),
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
+          if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
+            return denyPermission(reply, table.schema, "write");
+          }
           try {
             const params = request.params as { id: string };
             const pkValues = buildPkParams(table, params);

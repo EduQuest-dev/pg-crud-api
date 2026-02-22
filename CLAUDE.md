@@ -15,7 +15,8 @@ npm start                # Run production build (node dist/index.js)
 npm test                 # Run tests (vitest)
 npm run test:watch       # Run tests in watch mode
 npm run test:coverage    # Run tests with coverage report
-npm run generate-key -- <API_SECRET> <label>  # Generate an API key
+npm run generate-key -- <API_SECRET> <label>  # Generate an API key (full access)
+npm run generate-key -- <API_SECRET> <label> --schemas public:rw,reporting:r  # Generate key with schema permissions
 ```
 
 Requires a PostgreSQL database. Copy `.env.example` to `.env` and set `DATABASE_URL` and `API_SECRET`. Swagger UI available at `http://localhost:3000/docs` when running.
@@ -60,12 +61,20 @@ The startup flow is linear:
 4. **db/query-builder.ts** — Pure functions generating parameterized SQL (`$1`, `$2`, ...) for CRUD operations. Handles pagination, filtering (`filter.col=op:value`), full-text search (ILIKE), column selection, sorting. Maps PG types to JSON Schema via `pgTypeToJsonSchema`.
 5. **routes/crud.ts** — Registers Fastify CRUD endpoints per table. Generates OpenAPI schemas from `TableInfo`.
 6. **errors/pg-errors.ts** — Maps PG error codes to HTTP status codes (23505→409, 23503→400, 23502→400, 22P02→400).
-7. **auth/api-key.ts** — Stateless HMAC-SHA256 API key auth. Keys have format `pgcrud_{label}.{hmac_hex}`, derived from a single `API_SECRET`. Registers a Fastify `onRequest` hook that skips public paths (`/api/_health`, `/docs*`).
-8. **routes/schema.ts** — Agent-friendly schema endpoint (`/api/_schema`). Requires authentication when API keys are enabled.
+7. **auth/api-key.ts** — Stateless HMAC-SHA256 API key auth with optional schema-level permissions. Legacy keys have format `pgcrud_{label}.{hmac_hex}`; permission-scoped keys have format `pgcrud_{label}:{base64url_permissions}.{hmac_hex}`. Derived from a single `API_SECRET`. Registers a Fastify `onRequest` hook that skips public paths (`/api/_health`, `/docs*`).
+8. **routes/schema.ts** — Agent-friendly schema endpoint (`/api/_schema`). Requires authentication when API keys are enabled. Filters tables by key permissions.
 
 ### Authentication
 
-Keys are derived using `HMAC-SHA256(label, API_SECRET)` — no database storage needed. The label is a user-chosen identifier (e.g., `admin`, `service-a`). Verification recomputes the HMAC and uses `timingSafeEqual` for comparison.
+Keys are derived using `HMAC-SHA256(data, API_SECRET)` — no database storage needed. The label is a user-chosen identifier (e.g., `admin`, `service-a`). Verification recomputes the HMAC and uses `timingSafeEqual` for comparison.
+
+**Key formats:**
+- Legacy (full access): `pgcrud_{label}.{hmac}` — HMAC covers the label
+- With permissions: `pgcrud_{label}:{base64url_json}.{hmac}` — HMAC covers `{label}:{base64url_json}`, making permissions tamper-proof
+
+**Schema permissions** are encoded as JSON in the key: `{"public":"rw","reporting":"r"}`. Permission values: `"r"` (read), `"w"` (write), `"rw"` (both). Use `"*"` as schema name for wildcard access. Legacy keys without permissions get full access.
+
+Permission enforcement: read operations (GET) require `"r"`, write operations (POST/PUT/PATCH/DELETE) require `"w"`. Denied requests receive 403. Meta/schema endpoints filter tables to only show accessible schemas.
 
 Accepted headers: `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 

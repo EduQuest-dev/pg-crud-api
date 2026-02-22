@@ -969,12 +969,12 @@ describe("MCP Server", () => {
       expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("Foreign key violation");
     });
 
-    it("soft-deletes when table has deleted_at column", async () => {
+    it("soft-deletes when table has deleted_at column (also sets updated_at)", async () => {
       const mockPool = createMockPool();
       const mockQuery = getMockQuery(mockPool);
       const now = new Date().toISOString();
       mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", deleted_at: now }],
+        rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", updated_at: now, deleted_at: now }],
         rowCount: 1,
       });
 
@@ -991,11 +991,13 @@ describe("MCP Server", () => {
       expect(parsed.deleted).toBe(true);
       expect(parsed.softDelete).toBe(true);
       expect(parsed.record.deleted_at).toBe(now);
+      expect(parsed.record.updated_at).toBe(now);
 
-      // Verify the SQL was an UPDATE, not DELETE
+      // Verify the SQL was an UPDATE with both deleted_at and updated_at
       const sql = mockQuery.mock.calls[0][0].text;
       expect(sql).toContain("UPDATE");
-      expect(sql).toContain('SET "deleted_at" = NOW()');
+      expect(sql).toContain('"deleted_at" = NOW()');
+      expect(sql).toContain('"updated_at" = NOW()');
       expect(sql).not.toContain("DELETE FROM");
     });
 

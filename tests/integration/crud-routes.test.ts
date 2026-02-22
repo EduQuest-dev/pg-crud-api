@@ -533,10 +533,10 @@ describe("CRUD Routes - Soft Delete", () => {
     vi.mocked(mockPool.query).mockReset();
   });
 
-  it("soft-deletes by setting deleted_at instead of removing row", async () => {
+  it("soft-deletes by setting deleted_at and updated_at instead of removing row", async () => {
     const now = new Date().toISOString();
     vi.mocked(mockPool.query).mockResolvedValueOnce({
-      rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", deleted_at: now }],
+      rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", updated_at: now, deleted_at: now }],
       rowCount: 1,
     } as any);
 
@@ -546,11 +546,13 @@ describe("CRUD Routes - Soft Delete", () => {
     expect(body.deleted).toBe(true);
     expect(body.softDelete).toBe(true);
     expect(body.record.deleted_at).toBe(now);
+    expect(body.record.updated_at).toBe(now);
 
     // Verify the SQL was an UPDATE, not a DELETE
     const sql = vi.mocked(mockPool.query).mock.calls[0][0] as any;
     expect(sql.text).toContain("UPDATE");
     expect(sql.text).toContain('SET "deleted_at" = NOW()');
+    expect(sql.text).toContain('"updated_at" = NOW()');
     expect(sql.text).not.toContain("DELETE FROM");
   });
 

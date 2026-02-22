@@ -158,7 +158,8 @@ export function makeSoftDeleteTable(): TableInfo {
       makeColumn({ name: "title", dataType: "character varying", udtName: "varchar", isNullable: false, hasDefault: false, maxLength: 255, ordinalPosition: 3 }),
       makeColumn({ name: "body", dataType: "text", udtName: "text", isNullable: true, hasDefault: false, ordinalPosition: 4 }),
       makeColumn({ name: "created_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: false, hasDefault: true, defaultValue: "now()", ordinalPosition: 5 }),
-      makeColumn({ name: "deleted_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, hasDefault: false, ordinalPosition: 6 }),
+      makeColumn({ name: "updated_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, hasDefault: false, ordinalPosition: 6 }),
+      makeColumn({ name: "deleted_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, hasDefault: false, ordinalPosition: 7 }),
     ],
   };
 }

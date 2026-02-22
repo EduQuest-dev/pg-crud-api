@@ -109,6 +109,33 @@ function denyPermission(reply: FastifyReply, schema: string, access: string) {
   });
 }
 
+/**
+ * Parse PK from request params, or send a 400 response and return null.
+ */
+function parsePkOrReply(
+  table: TableInfo,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Record<string, unknown> | null {
+  const params = request.params as { id: string };
+  const pkValues = buildPkParams(table, params);
+  if (!pkValues) {
+    reply.status(400).send({
+      error: "Bad request",
+      message: `Composite primary key expects ${table.primaryKeys.length} values (${table.primaryKeys.join(",")})`,
+    });
+  }
+  return pkValues;
+}
+
+// ─── Common response schemas ─────────────────────────────────────────
+
+const ERROR_401 = errorSchema("Unauthorized");
+const ERROR_403 = errorSchema("Forbidden");
+const ERROR_404 = errorSchema("Record not found");
+const ERROR_400 = errorSchema("Bad request");
+const ERROR_409 = errorSchema("Conflict — duplicate key");
+
 // ─── Route Registration ──────────────────────────────────────────────
 
 export async function registerCrudRoutes(
@@ -208,9 +235,9 @@ export async function registerCrudRoutes(
               },
             },
           },
-          400: errorSchema("Bad request"),
-          401: errorSchema("Unauthorized"),
-          403: errorSchema("Forbidden"),
+          400: ERROR_400,
+          401: ERROR_401,
+          403: ERROR_403,
         },
       },
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
@@ -298,9 +325,9 @@ export async function registerCrudRoutes(
           },
           response: {
             200: { description: "Record found", ...rowSchema },
-            401: errorSchema("Unauthorized"),
-            403: errorSchema("Forbidden"),
-            404: errorSchema("Record not found"),
+            401: ERROR_401,
+            403: ERROR_403,
+            404: ERROR_404,
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
@@ -308,16 +335,10 @@ export async function registerCrudRoutes(
             return denyPermission(reply, table.schema, "read");
           }
           try {
-            const params = request.params as { id: string };
             const query = request.query as Record<string, string>;
             const select = query.select ? query.select.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
-            const pkValues = buildPkParams(table, params);
-            if (!pkValues) {
-              return reply.status(400).send({
-                error: "Bad request",
-                message: `Composite primary key expects ${table.primaryKeys.length} values (${table.primaryKeys.join(",")})`,
-              });
-            }
+            const pkValues = parsePkOrReply(table, request, reply);
+            if (!pkValues) return;
 
             const result = await readPool.query(buildSelectByPkQuery(table, pkValues, select));
 
@@ -358,10 +379,10 @@ export async function registerCrudRoutes(
               },
             ],
           },
-          400: errorSchema("Bad request"),
-          401: errorSchema("Unauthorized"),
-          403: errorSchema("Forbidden"),
-          409: errorSchema("Conflict — duplicate key"),
+          400: ERROR_400,
+          401: ERROR_401,
+          403: ERROR_403,
+          409: ERROR_409,
         },
       },
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
@@ -384,49 +405,48 @@ export async function registerCrudRoutes(
       },
     });
 
-    // ── UPDATE (PUT /:id) — full replacement ──
+    // ── Shared update handler for PUT and PATCH ──
+    const updateHandler = async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
+        return denyPermission(reply, table.schema, "write");
+      }
+      try {
+        const pkValues = parsePkOrReply(table, request, reply);
+        if (!pkValues) return;
+        const body = request.body as Record<string, unknown>;
+
+        const result = await pool.query(buildUpdateQuery(table, pkValues, body));
+
+        if (result.rows.length === 0) {
+          return reply.status(404).send({ error: "Record not found" });
+        }
+
+        return result.rows[0];
+      } catch (error) {
+        return handleRouteError(error, reply);
+      }
+    };
+
+    const updateResponseSchema = {
+      200: { description: "Record updated", ...rowSchema },
+      400: ERROR_400,
+      401: ERROR_401,
+      403: ERROR_403,
+      404: ERROR_404,
+      409: ERROR_409,
+    };
+
     if (table.primaryKeys.length > 0) {
+      // ── UPDATE (PUT /:id) — full replacement ──
       app.put(`${basePath}/:id`, {
         schema: {
           tags: [tag],
           summary: `Replace ${table.name} by primary key`,
           params: paramsSchema,
           body: putSchema,
-          response: {
-            200: { description: "Record updated", ...rowSchema },
-            400: errorSchema("Bad request"),
-            401: errorSchema("Unauthorized"),
-            403: errorSchema("Forbidden"),
-            404: errorSchema("Record not found"),
-            409: errorSchema("Conflict — duplicate key"),
-          },
+          response: updateResponseSchema,
         },
-        handler: async (request: FastifyRequest, reply: FastifyReply) => {
-          if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
-            return denyPermission(reply, table.schema, "write");
-          }
-          try {
-            const params = request.params as { id: string };
-            const pkValues = buildPkParams(table, params);
-            if (!pkValues) {
-              return reply.status(400).send({
-                error: "Bad request",
-                message: `Composite primary key expects ${table.primaryKeys.length} values (${table.primaryKeys.join(",")})`,
-              });
-            }
-            const body = request.body as Record<string, unknown>;
-
-            const result = await pool.query(buildUpdateQuery(table, pkValues, body));
-
-            if (result.rows.length === 0) {
-              return reply.status(404).send({ error: "Record not found" });
-            }
-
-            return result.rows[0];
-          } catch (error) {
-            return handleRouteError(error, reply);
-          }
-        },
+        handler: updateHandler,
       });
 
       // ── PATCH (partial update) ──
@@ -436,41 +456,9 @@ export async function registerCrudRoutes(
           summary: `Partially update ${table.name} by primary key`,
           params: paramsSchema,
           body: patchSchema,
-          response: {
-            200: { description: "Record updated", ...rowSchema },
-            400: errorSchema("Bad request"),
-            401: errorSchema("Unauthorized"),
-            403: errorSchema("Forbidden"),
-            404: errorSchema("Record not found"),
-            409: errorSchema("Conflict — duplicate key"),
-          },
+          response: updateResponseSchema,
         },
-        handler: async (request: FastifyRequest, reply: FastifyReply) => {
-          if (!hasPermission(request.apiKeyPermissions, table.schema, "w")) {
-            return denyPermission(reply, table.schema, "write");
-          }
-          try {
-            const params = request.params as { id: string };
-            const pkValues = buildPkParams(table, params);
-            if (!pkValues) {
-              return reply.status(400).send({
-                error: "Bad request",
-                message: `Composite primary key expects ${table.primaryKeys.length} values (${table.primaryKeys.join(",")})`,
-              });
-            }
-            const body = request.body as Record<string, unknown>;
-
-            const result = await pool.query(buildUpdateQuery(table, pkValues, body));
-
-            if (result.rows.length === 0) {
-              return reply.status(404).send({ error: "Record not found" });
-            }
-
-            return result.rows[0];
-          } catch (error) {
-            return handleRouteError(error, reply);
-          }
-        },
+        handler: updateHandler,
       });
 
       // ── DELETE (DELETE /:id) ──
@@ -488,9 +476,9 @@ export async function registerCrudRoutes(
                 record: rowSchema,
               },
             },
-            401: errorSchema("Unauthorized"),
-            403: errorSchema("Forbidden"),
-            404: errorSchema("Record not found"),
+            401: ERROR_401,
+            403: ERROR_403,
+            404: ERROR_404,
           },
         },
         handler: async (request: FastifyRequest, reply: FastifyReply) => {
@@ -498,14 +486,8 @@ export async function registerCrudRoutes(
             return denyPermission(reply, table.schema, "write");
           }
           try {
-            const params = request.params as { id: string };
-            const pkValues = buildPkParams(table, params);
-            if (!pkValues) {
-              return reply.status(400).send({
-                error: "Bad request",
-                message: `Composite primary key expects ${table.primaryKeys.length} values (${table.primaryKeys.join(",")})`,
-              });
-            }
+            const pkValues = parsePkOrReply(table, request, reply);
+            if (!pkValues) return;
 
             const result = await pool.query(buildDeleteQuery(table, pkValues));
 

@@ -218,7 +218,7 @@ export function computeDatabaseHash(schema: DatabaseSchema): string {
   const canonical: unknown[] = [];
 
   // Sort schemas for determinism
-  const sortedSchemas = [...schema.schemas].sort();
+  const sortedSchemas = [...schema.schemas].sort((a, b) => a.localeCompare(b));
   canonical.push(sortedSchemas);
 
   // Sort tables by fqn and serialize each table's structure
@@ -244,7 +244,7 @@ export function computeDatabaseHash(schema: DatabaseSchema): string {
           maxLength: c.maxLength,
           ordinalPosition: c.ordinalPosition,
         })),
-      primaryKeys: [...table.primaryKeys].sort(),
+      primaryKeys: [...table.primaryKeys].sort((a, b) => a.localeCompare(b)),
       foreignKeys: table.foreignKeys
         .slice()
         .sort((a, b) => a.constraintName.localeCompare(b.constraintName))

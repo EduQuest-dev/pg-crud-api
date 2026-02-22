@@ -1,170 +1,171 @@
-import Fastify from "fastify";
-import cors from "@fastify/cors";
-import swagger from "@fastify/swagger";
-import swaggerUi from "@fastify/swagger-ui";
-import addFormats from "ajv-formats";
-import type { FastifyError } from "fastify";
-import { Pool } from "pg";
-import { config } from "./config.js";
-import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "./build-info.js";
-import { introspectDatabase, computeDatabaseHash } from "./db/introspector.js";
-import { registerCrudRoutes } from "./routes/crud.js";
-import { registerSchemaRoutes } from "./routes/schema.js";
-import { registerAuthHook, verifyApiKey, extractApiKey } from "./auth/api-key.js";
-import { registerMcpRoutes } from "./mcp/routes.js";
+import Fastify from 'fastify'
+import cors from '@fastify/cors'
+import swagger from '@fastify/swagger'
+import swaggerUi from '@fastify/swagger-ui'
+import addFormats from 'ajv-formats'
+import type { FastifyError } from 'fastify'
+import { Pool } from 'pg'
+import { config } from './config.js'
+import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from './build-info.js'
+import { introspectDatabase, computeDatabaseHash } from './db/introspector.js'
+import { registerCrudRoutes } from './routes/crud.js'
+import { registerSchemaRoutes } from './routes/schema.js'
+import { registerAuthHook, verifyApiKey, extractApiKey } from './auth/api-key.js'
+import { registerMcpRoutes } from './mcp/routes.js'
 
-async function testDatabaseConnection(pool: Pool): Promise<void> {
-  let client;
+async function testDatabaseConnection (pool: Pool): Promise<void> {
+  let client
   try {
-    client = await pool.connect();
-    const versionResult = await client.query("SELECT version()");
-    console.log(`🐘 Connected to PostgreSQL`);
-    console.log(`   ${versionResult.rows[0].version.split(",")[0]}`);
+    client = await pool.connect()
+    const versionResult = await client.query('SELECT version()')
+    console.log('🐘 Connected to PostgreSQL')
+    console.log(`   ${versionResult.rows[0].version.split(',')[0]}`)
   } catch (err) {
-    console.error("❌ Failed to connect to database:", (err as Error).message);
-    await pool.end().catch(() => {});
-    process.exit(1);
+    console.error('❌ Failed to connect to database:', (err as Error).message)
+    await pool.end().catch(() => {})
+    process.exit(1)
   } finally {
-    client?.release();
+    client?.release()
   }
 }
 
-async function main() {
+async function main () {
   // ── Database connection ──
   const pool = new Pool({
     connectionString: config.databaseUrl,
     statement_timeout: 30_000,
-  });
+  })
 
   // Read replica pool (falls back to primary pool when DATABASE_READ_URL is not set)
   const readPool = config.databaseReadUrl
     ? new Pool({ connectionString: config.databaseReadUrl, statement_timeout: 30_000 })
-    : pool;
+    : pool
 
   try {
+    await testDatabaseConnection(pool)
+    if (config.databaseReadUrl) {
+      console.log('\n🔄 Testing read replica connection...')
+      await testDatabaseConnection(readPool)
+    }
 
-  await testDatabaseConnection(pool);
-  if (config.databaseReadUrl) {
-    console.log("\n🔄 Testing read replica connection...");
-    await testDatabaseConnection(readPool);
-  }
+    // ── Introspect database ──
+    console.log('\n🔍 Introspecting database...')
+    const dbSchema = await introspectDatabase(pool)
+    const dbHash = computeDatabaseHash(dbSchema)
 
-  // ── Introspect database ──
-  console.log("\n🔍 Introspecting database...");
-  const dbSchema = await introspectDatabase(pool);
-  const dbHash = computeDatabaseHash(dbSchema);
+    // ── Create Fastify server ──
+    const isDev = process.env.NODE_ENV !== 'production'
+    const loggerConfig = isDev
+      ? {
+          level: 'info' as const,
+          transport: {
+            target: 'pino-pretty',
+            options: { translateTime: 'HH:mm:ss', ignore: 'pid,hostname' },
+          },
+        }
+      : { level: 'info' as const }
 
-  // ── Create Fastify server ──
-  const isDev = process.env.NODE_ENV !== "production";
-  const loggerConfig = isDev
-    ? {
-        level: "info" as const,
-        transport: {
-          target: "pino-pretty",
-          options: { translateTime: "HH:mm:ss", ignore: "pid,hostname" },
-        },
+    const app = Fastify({
+      logger: loggerConfig,
+      bodyLimit: config.bodyLimit,
+      ajv: {
+        plugins: [addFormats] as never,
+      },
+    })
+
+    // ── Validation error handler ──
+    app.setErrorHandler((error: FastifyError, _request, reply) => {
+      if (error.validation) {
+        const details = error.validation.map((v: { instancePath?: string; params?: Record<string, unknown>; message?: string }) => ({
+          field: v.instancePath || v.params?.missingProperty || 'unknown',
+          message: v.message || 'Invalid value',
+          ...(v.params ? { constraint: v.params } : {}),
+        }))
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: `${details.length} validation error(s)`,
+          details,
+        })
       }
-    : { level: "info" as const };
+      // Re-throw non-validation errors
+      reply.status(error.statusCode || 500).send({
+        error: error.name || 'Error',
+        message: error.message,
+      })
+    })
 
-  const app = Fastify({
-    logger: loggerConfig,
-    bodyLimit: config.bodyLimit,
-    ajv: {
-      plugins: [addFormats] as never,
-    },
-  });
+    // ── CORS ──
+    await app.register(cors, {
+      origin: typeof config.corsOrigins === 'string'
+        ? config.corsOrigins.split(',').map((s) => s.trim())
+        : config.corsOrigins,
+    })
 
-  // ── Validation error handler ──
-  app.setErrorHandler((error: FastifyError, _request, reply) => {
-    if (error.validation) {
-      const details = error.validation.map((v: { instancePath?: string; params?: Record<string, unknown>; message?: string }) => ({
-        field: v.instancePath || v.params?.missingProperty || "unknown",
-        message: v.message || "Invalid value",
-        ...(v.params ? { constraint: v.params } : {}),
-      }));
-      return reply.status(400).send({
-        error: "Validation Error",
-        message: `${details.length} validation error(s)`,
-        details,
-      });
+    // ── Authentication ──
+    if (!config.apiKeysEnabled) {
+      console.warn('⚠️  API key authentication is DISABLED')
     }
-    // Re-throw non-validation errors
-    reply.status(error.statusCode || 500).send({
-      error: error.name || "Error",
-      message: error.message,
-    });
-  });
-
-  // ── CORS ──
-  await app.register(cors, {
-    origin: typeof config.corsOrigins === "string"
-      ? config.corsOrigins.split(",").map((s) => s.trim())
-      : config.corsOrigins,
-  });
-
-  // ── Authentication ──
-  if (config.apiKeysEnabled) {
-    if (!config.apiSecret) {
-      console.error("❌ API_KEYS_ENABLED is true but API_SECRET is not set.");
-      console.error("   Set API_SECRET in .env or disable auth with API_KEYS_ENABLED=false");
-      process.exit(1);
+    if (config.apiKeysEnabled) {
+      if (!config.apiSecret) {
+        console.error('❌ API_KEYS_ENABLED is true but API_SECRET is not set.')
+        console.error('   Set API_SECRET in .env or disable auth with API_KEYS_ENABLED=false')
+        process.exit(1)
+      }
+      registerAuthHook(app, config.apiSecret)
+      console.log('🔐 API key authentication enabled')
     }
-    registerAuthHook(app, config.apiSecret);
-    console.log("🔐 API key authentication enabled");
-  } else {
-    console.warn("⚠️  API key authentication is DISABLED");
-  }
 
-  // ── Swagger ──
-  if (config.swaggerEnabled) {
-    await app.register(swagger, {
-      openapi: {
-        openapi: "3.0.0",
-        info: {
-          title: "Auto-Generated CRUD API",
-          description: `Dynamically generated REST API for PostgreSQL database.\n\nSchemas: ${dbSchema.schemas.join(", ")}\nTables: ${dbSchema.tables.size}\nBuild: ${BUILD_VERSION}+${BUILD_GIT_HASH} (${BUILD_TIMESTAMP})`,
-          version: BUILD_VERSION,
-        },
-        tags: Array.from(dbSchema.tables.values()).map((t) => ({
-          name: t.schema === "public" ? t.name : `${t.schema}.${t.name}`,
-          description: `CRUD operations for ${t.fqn}`,
-        })),
-        ...(config.apiKeysEnabled
-          ? {
-              components: {
-                securitySchemes: {
-                  bearerAuth: {
-                    type: "http",
-                    scheme: "bearer",
-                    description: "API key in format: pgcrud_{label}.{hmac}",
-                  },
-                  apiKeyHeader: {
-                    type: "apiKey",
-                    in: "header",
-                    name: "X-API-Key",
-                    description: "API key in format: pgcrud_{label}.{hmac}",
+    // ── Swagger ──
+    if (config.swaggerEnabled) {
+      await app.register(swagger, {
+        openapi: {
+          openapi: '3.0.0',
+          info: {
+            title: 'Auto-Generated CRUD API',
+            description: `Dynamically generated REST API for PostgreSQL database.\n\nSchemas: ${dbSchema.schemas.join(', ')}\nTables: ${dbSchema.tables.size}\nBuild: ${BUILD_VERSION}+${BUILD_GIT_HASH} (${BUILD_TIMESTAMP})`,
+            version: BUILD_VERSION,
+          },
+          tags: Array.from(dbSchema.tables.values()).map((t) => ({
+            name: t.schema === 'public' ? t.name : `${t.schema}.${t.name}`,
+            description: `CRUD operations for ${t.fqn}`,
+          })),
+          ...(config.apiKeysEnabled
+            ? {
+                components: {
+                  securitySchemes: {
+                    bearerAuth: {
+                      type: 'http',
+                      scheme: 'bearer',
+                      description: 'API key in format: pgcrud_{label}.{hmac}',
+                    },
+                    apiKeyHeader: {
+                      type: 'apiKey',
+                      in: 'header',
+                      name: 'X-API-Key',
+                      description: 'API key in format: pgcrud_{label}.{hmac}',
+                    },
                   },
                 },
-              },
-              security: [{ bearerAuth: [] }, { apiKeyHeader: [] }],
-            }
-          : {}),
-      },
-    });
+                security: [{ bearerAuth: [] }, { apiKeyHeader: [] }],
+              }
+            : {}),
+        },
+      })
 
-    await app.register(swaggerUi, {
-      routePrefix: "/docs",
-      uiConfig: {
-        docExpansion: "list",
-        deepLinking: true,
-        persistAuthorization: true,
-        // NOTE: new Function() is used here because @fastify/swagger-ui serializes these
-        // callbacks to inject them as inline scripts in the Swagger UI HTML page. They run
-        // client-side in the browser, not on the server. No user input is interpolated.
-        // This requires 'unsafe-eval' CSP if a Content-Security-Policy header is set.
+      await app.register(swaggerUi, {
+        routePrefix: '/docs',
+        uiConfig: {
+          docExpansion: 'list',
+          deepLinking: true,
+          persistAuthorization: true,
+          // NOTE: new Function() is used here because @fastify/swagger-ui serializes these
+          // callbacks to inject them as inline scripts in the Swagger UI HTML page. They run
+          // client-side in the browser, not on the server. No user input is interpolated.
+          // This requires 'unsafe-eval' CSP if a Content-Security-Policy header is set.
 
-        // Inject stored API key into ALL requests including the initial spec fetch.
-        requestInterceptor: new Function("req", `
+          // Inject stored API key into ALL requests including the initial spec fetch.
+          // eslint-disable-next-line no-new-func -- serialized as inline browser script by swagger-ui
+          requestInterceptor: new Function('req', `
           try {
             var stored = JSON.parse(localStorage.getItem("authorized") || "{}");
             var bearer = stored && stored.bearerAuth && stored.bearerAuth.schema
@@ -175,8 +176,9 @@ async function main() {
           } catch(e) {}
           return req;
         `) as never, // Function type not assignable to swagger-ui's expected type
-        // After user clicks Authorize, automatically reload the spec so endpoints appear.
-        onComplete: new Function(`
+          // After user clicks Authorize, automatically reload the spec so endpoints appear.
+          // eslint-disable-next-line no-new-func -- serialized as inline browser script by swagger-ui
+          onComplete: new Function(`
           var checkInterval = setInterval(function() {
             var btn = document.querySelector('.btn.authorize');
             if (btn && !btn._patched) {
@@ -199,116 +201,118 @@ async function main() {
             }
           }, 500);
         `) as never, // Function type not assignable to swagger-ui's expected type
-      },
-      ...(config.apiKeysEnabled && config.apiSecret
-        ? {
-            transformSpecification: (swaggerObject: Record<string, unknown>, request: { headers: Record<string, string | string[] | undefined> }) => {
-              const authHeader = request.headers.authorization;
-              const apiKeyHeader = request.headers["x-api-key"];
-              let key: string | null = null;
-              if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
-                key = authHeader.slice(7).trim();
-              } else if (typeof apiKeyHeader === "string") {
-                key = apiKeyHeader.trim();
-              }
-              if (key && verifyApiKey(key, config.apiSecret!).valid) {
-                return swaggerObject;
-              }
-              return {
-                openapi: "3.0.0",
-                info: {
-                  title: "Auto-Generated CRUD API",
-                  description: "Authenticate using the **Authorize** button above to view API endpoints.",
-                  version: BUILD_VERSION,
-                },
-                paths: {},
-                components: swaggerObject.components || {},
-                security: swaggerObject.security || [],
-              };
-            },
-          }
-        : {}),
-    });
-  }
+        },
+        ...(config.apiKeysEnabled && config.apiSecret
+          ? {
+              transformSpecification: (swaggerObject: Record<string, unknown>, request: { headers: Record<string, string | string[] | undefined> }) => {
+                const authHeader = request.headers.authorization
+                const apiKeyHeader = request.headers['x-api-key']
+                const key = (() => {
+                  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+                    return authHeader.slice(7).trim()
+                  }
+                  if (typeof apiKeyHeader === 'string') {
+                    return apiKeyHeader.trim()
+                  }
+                  return null
+                })()
+                if (key && verifyApiKey(key, config.apiSecret!).valid) {
+                  return swaggerObject
+                }
+                return {
+                  openapi: '3.0.0',
+                  info: {
+                    title: 'Auto-Generated CRUD API',
+                    description: 'Authenticate using the **Authorize** button above to view API endpoints.',
+                    version: BUILD_VERSION,
+                  },
+                  paths: {},
+                  components: swaggerObject.components || {},
+                  security: swaggerObject.security || [],
+                }
+              },
+            }
+          : {}),
+      })
+    }
 
-  // ── Health check ──
-  app.get("/api/_health", async (request, reply) => {
-    try {
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Health check timeout")), 5000)
-      );
-      await Promise.race([pool.query("SELECT 1"), timeout]);
+    // ── Health check ──
+    app.get('/api/_health', async (request, reply) => {
+      try {
+        const timeout = new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), 5000)
+        )
+        await Promise.race([pool.query('SELECT 1'), timeout])
 
-      const base = {
-        status: "healthy" as const,
-        version: BUILD_VERSION,
-        buildGitHash: BUILD_GIT_HASH,
-        buildTimestamp: BUILD_TIMESTAMP,
-      };
+        const base = {
+          status: 'healthy' as const,
+          version: BUILD_VERSION,
+          buildGitHash: BUILD_GIT_HASH,
+          buildTimestamp: BUILD_TIMESTAMP,
+        }
 
-      // Only expose table/schema details to authenticated requests
-      const authenticated = !config.apiKeysEnabled
-        || (config.apiSecret && (() => {
-          const key = extractApiKey(request);
-          return key ? verifyApiKey(key, config.apiSecret!).valid : false;
-        })());
+        // Only expose table/schema details to authenticated requests
+        const authenticated = !config.apiKeysEnabled ||
+        (config.apiSecret && (() => {
+          const key = extractApiKey(request)
+          return key ? verifyApiKey(key, config.apiSecret!).valid : false
+        })())
 
-      if (authenticated) {
-        return { ...base, databaseHash: dbHash, tables: dbSchema.tables.size, schemas: dbSchema.schemas };
+        if (authenticated) {
+          return { ...base, databaseHash: dbHash, tables: dbSchema.tables.size, schemas: dbSchema.schemas }
+        }
+        return base
+      } catch (err) {
+        request.log.error(err, 'Health check failed')
+        return reply.status(503).send({ status: 'unhealthy' })
       }
-      return base;
+    })
+
+    // ── Register all CRUD routes ──
+    console.log('\n🛤️  Registering routes...')
+    if (config.databaseReadUrl) {
+      console.log('📖 Read replica enabled — GET requests will use the read pool')
+    }
+    await registerCrudRoutes(app, pool, dbSchema, readPool)
+    await registerSchemaRoutes(app, dbSchema)
+    await registerMcpRoutes(app, { pool, readPool, dbSchema })
+    console.log('🤖 MCP endpoint: /mcp (Streamable HTTP)')
+
+    // ── Start server ──
+    try {
+      await app.listen({ port: config.port, host: config.host })
+      console.log(`\n🚀 Server running at http://${config.host}:${config.port}`)
+      if (config.swaggerEnabled) {
+        console.log(`📚 Swagger UI: http://localhost:${config.port}/docs`)
+      }
+      console.log(`❤️  Health: http://localhost:${config.port}/api/_health`)
+      console.log(`📋 Tables: http://localhost:${config.port}/api/_meta/tables`)
+      console.log(`🤖 Agent schema: http://localhost:${config.port}/api/_schema\n`)
     } catch (err) {
-      request.log.error(err, "Health check failed");
-      return reply.status(503).send({ status: "unhealthy" });
+      app.log.error(err)
+      process.exit(1)
     }
-  });
 
-  // ── Register all CRUD routes ──
-  console.log("\n🛤️  Registering routes...");
-  if (config.databaseReadUrl) {
-    console.log("📖 Read replica enabled — GET requests will use the read pool");
-  }
-  await registerCrudRoutes(app, pool, dbSchema, readPool);
-  await registerSchemaRoutes(app, dbSchema);
-  await registerMcpRoutes(app, { pool, readPool, dbSchema });
-  console.log("🤖 MCP endpoint: /mcp (Streamable HTTP)");
-
-  // ── Start server ──
-  try {
-    await app.listen({ port: config.port, host: config.host });
-    console.log(`\n🚀 Server running at http://${config.host}:${config.port}`);
-    if (config.swaggerEnabled) {
-      console.log(`📚 Swagger UI: http://localhost:${config.port}/docs`);
+    // ── Graceful shutdown ──
+    const shutdown = async () => {
+      console.log('\n🛑 Shutting down...')
+      await app.close()
+      await pool.end()
+      if (readPool !== pool) await readPool.end()
+      process.exit(0)
     }
-    console.log(`❤️  Health: http://localhost:${config.port}/api/_health`);
-    console.log(`📋 Tables: http://localhost:${config.port}/api/_meta/tables`);
-    console.log(`🤖 Agent schema: http://localhost:${config.port}/api/_schema\n`);
+
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
   } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
-
-  // ── Graceful shutdown ──
-  const shutdown = async () => {
-    console.log("\n🛑 Shutting down...");
-    await app.close();
-    await pool.end();
-    if (readPool !== pool) await readPool.end();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  } catch (err) {
-    console.error("Fatal error during startup:", err);
-    await pool.end().catch(() => {});
-    if (readPool !== pool) await readPool.end().catch(() => {});
-    process.exit(1);
+    console.error('Fatal error during startup:', err)
+    await pool.end().catch(() => {})
+    if (readPool !== pool) await readPool.end().catch(() => {})
+    process.exit(1)
   }
 }
 
 await main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+  console.error('Fatal error:', err)
+  process.exit(1)
+})

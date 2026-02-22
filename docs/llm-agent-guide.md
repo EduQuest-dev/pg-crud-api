@@ -231,10 +231,14 @@ DELETE /api/users/42
 
 Response (200):
 ```json
-{ "deleted": true, "record": { "id": 42, "email": "alice@example.com", "name": "Alice" } }
+{ "deleted": true, "softDelete": false, "record": { "id": 42, "email": "alice@example.com", "name": "Alice" } }
 ```
 
 **404** if not found.
+
+**Soft delete:** Tables with a `deleted_at` column are soft-deleted instead of removed. The API sets `deleted_at = NOW()` (and `updated_at = NOW()` if that column exists) via an UPDATE instead of DELETE. The response will have `"softDelete": true`. To find non-deleted records, filter with `?filter.deleted_at=is:null`.
+
+**Automatic timestamps:** Tables with an `updated_at` column will have it automatically set to `NOW()` on INSERT, UPDATE (PUT/PATCH), and soft DELETE. If you explicitly provide `updated_at` in the request body, your value is used instead.
 
 ---
 

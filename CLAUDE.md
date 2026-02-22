@@ -55,11 +55,11 @@ src/
 
 The startup flow is linear:
 
-1. **index.ts** — Connects to PostgreSQL via `pg.Pool`, introspects database, registers Fastify plugins (CORS, auth hook, Swagger), registers CRUD routes, starts server with graceful shutdown.
+1. **index.ts** — Connects to PostgreSQL via `pg.Pool` (optionally a separate read replica pool), introspects database, registers Fastify plugins (CORS, auth hook, Swagger), registers CRUD routes, starts server with graceful shutdown.
 2. **config.ts** — Reads `.env` into a typed `AppConfig` object. Defines `SYSTEM_SCHEMAS` always excluded from introspection.
 3. **db/introspector.ts** — Queries `information_schema` (columns, PKs, FKs) in parallel. Builds `Map<string, TableInfo>` keyed by fully-qualified name (`"schema"."table"`).
 4. **db/query-builder.ts** — Pure functions generating parameterized SQL (`$1`, `$2`, ...) for CRUD operations. Handles pagination, filtering (`filter.col=op:value`), full-text search (ILIKE), column selection, sorting. Maps PG types to JSON Schema via `pgTypeToJsonSchema`.
-5. **routes/crud.ts** — Registers Fastify CRUD endpoints per table. Generates OpenAPI schemas from `TableInfo`.
+5. **routes/crud.ts** — Registers Fastify CRUD endpoints per table. Generates OpenAPI schemas from `TableInfo`. Accepts optional `readPool` for read replica routing (GET→readPool, POST/PUT/PATCH/DELETE→writePool).
 6. **errors/pg-errors.ts** — Maps PG error codes to HTTP status codes (23505→409, 23503→400, 23502→400, 22P02→400).
 7. **auth/api-key.ts** — Stateless HMAC-SHA256 API key auth with optional schema-level permissions. Legacy keys have format `pgcrud_{label}.{hmac_hex}`; permission-scoped keys have format `pgcrud_{label}:{base64url_permissions}.{hmac_hex}`. Derived from a single `API_SECRET`. Registers a Fastify `onRequest` hook that skips public paths (`/api/_health`, `/docs*`).
 8. **routes/schema.ts** — Agent-friendly schema endpoint (`/api/_schema`). Requires authentication when API keys are enabled. Filters tables by key permissions.
@@ -96,6 +96,14 @@ Set `API_KEYS_ENABLED=false` to disable auth entirely (development mode). Server
 - Meta endpoints: `/api/_meta/tables`, `/api/_meta/tables/:table`, `/api/_health`
 - Agent schema: `/api/_schema` (all tables), `/api/_schema/:table` (single table)
 
+### Database pools (read replica support)
+
+When `DATABASE_READ_URL` is set, a separate `pg.Pool` is created for read operations. GET requests (list, get-by-PK) use the read pool; write operations (POST, PUT, PATCH, DELETE) use the primary pool. When not set, all queries use the single `DATABASE_URL` pool — fully backward compatible.
+
+Introspection and health checks always use the primary (write) pool, since the primary is the authoritative source for schema information. Both pools are gracefully shut down on SIGINT/SIGTERM.
+
+Note: read-after-write consistency is not guaranteed when using a read replica due to replication lag. Clients that need immediate consistency after writes should be aware of this trade-off.
+
 ### SQL safety
 
 All queries use parameterized placeholders. Identifiers are quoted via `quoteIdent()` which escapes double-quotes. Column names are validated against `TableInfo.columns` before use in queries.
@@ -114,6 +122,7 @@ All queries use parameterized placeholders. Identifiers are quoted via `quoteIde
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://localhost:5432/mydb` | PostgreSQL connection string (`jdbc:` prefix auto-stripped) |
+| `DATABASE_READ_URL` | _(none)_ | Read replica connection string (optional, falls back to `DATABASE_URL`). `jdbc:` prefix auto-stripped |
 | `PORT` | `3000` | Server port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `SCHEMAS` | _(all)_ | Comma-separated whitelist of schemas to expose |

@@ -11,7 +11,7 @@ vi.mock("../../src/config.js", () => ({
 
 import { introspectDatabase, computeDatabaseHash } from "../../src/db/introspector.js";
 import { config } from "../../src/config.js";
-import { makeDatabaseSchema, makeUsersTable, makeCompositePkTable, makeTableWithForeignKeys, makeColumn } from "../fixtures/tables.js";
+import { makeDatabaseSchema, makeUsersTable, makeCompositePkTable, makeTableWithForeignKeys, makeNonPublicSchemaTable, makeColumn } from "../fixtures/tables.js";
 
 // ─── Mock Pool Helpers ──────────────────────────────────────────────
 
@@ -498,6 +498,12 @@ describe("computeDatabaseHash", () => {
     const empty = makeDatabaseSchema([]);
     const nonEmpty = makeDatabaseSchema([makeUsersTable()]);
     expect(computeDatabaseHash(empty)).not.toBe(computeDatabaseHash(nonEmpty));
+  });
+
+  it("sorts schemas deterministically across multiple schemas", () => {
+    const schema1 = makeDatabaseSchema([makeNonPublicSchemaTable(), makeUsersTable()]);
+    const schema2 = makeDatabaseSchema([makeUsersTable(), makeNonPublicSchemaTable()]);
+    expect(computeDatabaseHash(schema1)).toBe(computeDatabaseHash(schema2));
   });
 
   it("sorts foreign keys deterministically by constraint name", () => {

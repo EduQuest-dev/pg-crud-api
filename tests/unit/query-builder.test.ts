@@ -16,10 +16,12 @@ import {
   buildBulkInsertQuery,
   buildUpdateQuery,
   buildDeleteQuery,
+  hasSoftDelete,
 } from "../../src/db/query-builder.js";
-import { makeUsersTable, makeCompositePkTable, makeNoPkTable } from "../fixtures/tables.js";
+import { makeUsersTable, makeCompositePkTable, makeNoPkTable, makeSoftDeleteTable } from "../fixtures/tables.js";
 
 const users = makeUsersTable();
+const softDeleteTable = makeSoftDeleteTable();
 const compositePk = makeCompositePkTable();
 
 // ── buildSelectQuery ────────────────────────────────────────────────
@@ -428,5 +430,34 @@ describe("buildDeleteQuery", () => {
     expect(result.text).toContain('"user_id" = $1');
     expect(result.text).toContain('"role_id" = $2');
     expect(result.values).toEqual(["42", "7"]);
+  });
+
+  it("generates soft-delete UPDATE when table has deleted_at column", () => {
+    const result = buildDeleteQuery(softDeleteTable, { id: "10" });
+    expect(result.text).toContain("UPDATE");
+    expect(result.text).toContain('SET "deleted_at" = NOW()');
+    expect(result.text).toContain('"id" = $1');
+    expect(result.text).toContain("RETURNING *");
+    expect(result.text).not.toContain("DELETE");
+    expect(result.values).toEqual(["10"]);
+  });
+
+  it("generates hard DELETE when table has no deleted_at column", () => {
+    const result = buildDeleteQuery(users, { id: "42" });
+    expect(result.text).toContain("DELETE FROM");
+    expect(result.text).not.toContain("UPDATE");
+    expect(result.text).not.toContain("deleted_at");
+  });
+});
+
+// ── hasSoftDelete ──────────────────────────────────────────────────
+
+describe("hasSoftDelete", () => {
+  it("returns true for tables with a deleted_at column", () => {
+    expect(hasSoftDelete(softDeleteTable)).toBe(true);
+  });
+
+  it("returns false for tables without a deleted_at column", () => {
+    expect(hasSoftDelete(users)).toBe(false);
   });
 });

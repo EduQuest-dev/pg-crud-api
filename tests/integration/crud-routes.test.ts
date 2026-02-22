@@ -6,6 +6,7 @@ import {
   makeCompositePkTable,
   makeNoPkTable,
   makeNonPublicSchemaTable,
+  makeSoftDeleteTable,
   makeDatabaseSchema,
 } from "../fixtures/tables.js";
 
@@ -473,7 +474,7 @@ describe("CRUD Routes - DELETE", () => {
     vi.mocked(mockPool.query).mockReset();
   });
 
-  it("returns 200 with deleted flag and record", async () => {
+  it("returns 200 with deleted flag and record (hard delete)", async () => {
     vi.mocked(mockPool.query).mockResolvedValueOnce({
       rows: [{ id: 42, name: "Alice", email: "alice@test.com", active: true }],
       rowCount: 1,
@@ -483,6 +484,7 @@ describe("CRUD Routes - DELETE", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.deleted).toBe(true);
+    expect(body.softDelete).toBe(false);
     expect(body.record.id).toBe(42);
   });
 
@@ -507,6 +509,56 @@ describe("CRUD Routes - DELETE", () => {
 
     const res = await app.inject({ method: "DELETE", url: "/api/users/42" });
     expect(res.statusCode).toBe(500);
+  });
+});
+
+// ── Soft Delete ─────────────────────────────────────────────────────
+
+describe("CRUD Routes - Soft Delete", () => {
+  let app: FastifyInstance;
+  let mockPool: ReturnType<typeof createMockPool>;
+  const posts = makeSoftDeleteTable();
+  const dbSchema = makeDatabaseSchema([posts]);
+
+  beforeAll(async () => {
+    mockPool = createMockPool();
+    app = await buildTestApp({ dbSchema, pool: mockPool as any });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    vi.mocked(mockPool.query).mockReset();
+  });
+
+  it("soft-deletes by setting deleted_at instead of removing row", async () => {
+    const now = new Date().toISOString();
+    vi.mocked(mockPool.query).mockResolvedValueOnce({
+      rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", deleted_at: now }],
+      rowCount: 1,
+    } as any);
+
+    const res = await app.inject({ method: "DELETE", url: "/api/posts/5" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.deleted).toBe(true);
+    expect(body.softDelete).toBe(true);
+    expect(body.record.deleted_at).toBe(now);
+
+    // Verify the SQL was an UPDATE, not a DELETE
+    const sql = vi.mocked(mockPool.query).mock.calls[0][0] as any;
+    expect(sql.text).toContain("UPDATE");
+    expect(sql.text).toContain('SET "deleted_at" = NOW()');
+    expect(sql.text).not.toContain("DELETE FROM");
+  });
+
+  it("returns 404 when soft-delete target not found", async () => {
+    vi.mocked(mockPool.query).mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+
+    const res = await app.inject({ method: "DELETE", url: "/api/posts/999" });
+    expect(res.statusCode).toBe(404);
   });
 });
 

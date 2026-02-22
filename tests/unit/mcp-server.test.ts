@@ -26,6 +26,7 @@ import {
   makeNoPkTable,
   makeNonPublicSchemaTable,
   makeTableWithForeignKeys,
+  makeSoftDeleteTable,
   makeDatabaseSchema,
 } from "../fixtures/tables.js";
 import type { TableInfo } from "../../src/db/introspector.js";
@@ -56,7 +57,8 @@ async function setupMcpTest(opts?: {
   const noPkTable = makeNoPkTable();
   const nonPublicTable = makeNonPublicSchemaTable();
   const ordersTable = makeTableWithForeignKeys();
-  const dbSchema = makeDatabaseSchema([usersTable, compositePkTable, noPkTable, nonPublicTable, ordersTable]);
+  const softDeleteTable = makeSoftDeleteTable();
+  const dbSchema = makeDatabaseSchema([usersTable, compositePkTable, noPkTable, nonPublicTable, ordersTable, softDeleteTable]);
 
   const pool = opts?.pool ?? createMockPool();
   const readPool = opts?.readPool ?? pool;
@@ -106,10 +108,10 @@ describe("MCP Server", () => {
       const result = await client.callTool({ name: "list_tables", arguments: {} });
       const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text);
 
-      expect(parsed.count).toBe(5);
-      expect(parsed.tables).toHaveLength(5);
+      expect(parsed.count).toBe(6);
+      expect(parsed.tables).toHaveLength(6);
       expect(parsed.tables.map((t: { name: string }) => t.name).sort()).toEqual([
-        "audit_logs", "metrics", "orders", "user_roles", "users",
+        "audit_logs", "metrics", "orders", "posts", "user_roles", "users",
       ]);
 
       // Check table structure
@@ -145,7 +147,7 @@ describe("MCP Server", () => {
       const result = await client.callTool({ name: "list_tables", arguments: {} });
       const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text);
 
-      expect(parsed.count).toBe(5);
+      expect(parsed.count).toBe(6);
     });
   });
 
@@ -966,6 +968,59 @@ describe("MCP Server", () => {
       expect(result.isError).toBe(true);
       expect((result.content as Array<{ type: string; text: string }>)[0].text).toContain("Foreign key violation");
     });
+
+    it("soft-deletes when table has deleted_at column", async () => {
+      const mockPool = createMockPool();
+      const mockQuery = getMockQuery(mockPool);
+      const now = new Date().toISOString();
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 5, user_id: 1, title: "Hello", body: "World", created_at: "2025-01-01", deleted_at: now }],
+        rowCount: 1,
+      });
+
+      const ctx = await setupMcpTest({ pool: mockPool, readPool: mockPool });
+      client = ctx.client;
+      cleanup = () => Promise.all([ctx.client.close(), ctx.mcpServer.close()]).then(() => {});
+
+      const result = await client.callTool({
+        name: "delete_record",
+        arguments: { table: "posts", id: "5" },
+      });
+      const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text);
+
+      expect(parsed.deleted).toBe(true);
+      expect(parsed.softDelete).toBe(true);
+      expect(parsed.record.deleted_at).toBe(now);
+
+      // Verify the SQL was an UPDATE, not DELETE
+      const sql = mockQuery.mock.calls[0][0].text;
+      expect(sql).toContain("UPDATE");
+      expect(sql).toContain('SET "deleted_at" = NOW()');
+      expect(sql).not.toContain("DELETE FROM");
+    });
+
+    it("hard-deletes when table has no deleted_at column", async () => {
+      const mockPool = createMockPool();
+      const mockQuery = getMockQuery(mockPool);
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, name: "Alice" }],
+        rowCount: 1,
+      });
+
+      const ctx = await setupMcpTest({ pool: mockPool, readPool: mockPool });
+      client = ctx.client;
+      cleanup = () => Promise.all([ctx.client.close(), ctx.mcpServer.close()]).then(() => {});
+
+      const result = await client.callTool({
+        name: "delete_record",
+        arguments: { table: "users", id: "1" },
+      });
+      const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0].text);
+
+      expect(parsed.deleted).toBe(true);
+      expect(parsed.softDelete).toBe(false);
+      expect(mockQuery.mock.calls[0][0].text).toContain("DELETE FROM");
+    });
   });
 
   // ── Tool listing ───────────────────────────────────────────────────
@@ -1025,7 +1080,7 @@ describe("MCP Server", () => {
       expect(parsed.api).toBeDefined();
       expect(parsed.api.pagination).toBeDefined();
       expect(parsed.api.filtering).toBeDefined();
-      expect(parsed.tables).toHaveLength(5);
+      expect(parsed.tables).toHaveLength(6);
     });
 
     it("filters schema resource by permissions", async () => {
@@ -1110,7 +1165,7 @@ describe("MCP Server", () => {
       expect(result.messages[0].role).toBe("user");
       const text = (result.messages[0].content as { type: string; text: string }).text;
       expect(text).toContain("PostgreSQL database");
-      expect(text).toContain("5 tables");
+      expect(text).toContain("6 tables");
       expect(text).toContain("list_tables");
       expect(text).toContain("describe_table");
     });

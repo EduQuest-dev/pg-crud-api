@@ -9,6 +9,7 @@ import {
   buildBulkInsertQuery,
   buildUpdateQuery,
   buildDeleteQuery,
+  hasSoftDelete,
   pgTypeToJsonSchema,
   ListOptions,
 } from "../db/query-builder.js";
@@ -462,17 +463,21 @@ export async function registerCrudRoutes(
       });
 
       // ── DELETE (DELETE /:id) ──
+      const isSoftDelete = hasSoftDelete(table);
       app.delete(`${basePath}/:id`, {
         schema: {
           tags: [tag],
-          summary: `Delete ${table.name} by primary key`,
+          summary: isSoftDelete
+            ? `Soft-delete ${table.name} by primary key (sets deleted_at)`
+            : `Delete ${table.name} by primary key`,
           params: paramsSchema,
           response: {
             200: {
-              description: "Record deleted",
+              description: isSoftDelete ? "Record soft-deleted" : "Record deleted",
               type: "object",
               properties: {
                 deleted: { type: "boolean" },
+                softDelete: { type: "boolean" },
                 record: rowSchema,
               },
             },
@@ -495,7 +500,7 @@ export async function registerCrudRoutes(
               return reply.status(404).send({ error: "Record not found" });
             }
 
-            return { deleted: true, record: result.rows[0] };
+            return { deleted: true, softDelete: isSoftDelete, record: result.rows[0] };
           } catch (error) {
             return handleRouteError(error, reply);
           }

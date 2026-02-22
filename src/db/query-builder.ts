@@ -314,6 +314,10 @@ export function buildUpdateQuery(
 
 // ─── DELETE ──────────────────────────────────────────────────────────
 
+export function hasSoftDelete(table: TableInfo): boolean {
+  return table.columns.some((c) => c.name === "deleted_at");
+}
+
 export function buildDeleteQuery(
   table: TableInfo,
   pkValues: Record<string, unknown>
@@ -326,7 +330,13 @@ export function buildDeleteQuery(
     return `${quoteIdent(pk)} = $${paramIdx++}`;
   });
 
-  const sql = `DELETE FROM ${table.fqn} WHERE ${whereClauses.join(" AND ")} RETURNING *`;
+  const whereStr = whereClauses.join(" AND ");
+
+  // Soft delete: if the table has a "deleted_at" column, set it to NOW() instead of deleting
+  const sql = hasSoftDelete(table)
+    ? `UPDATE ${table.fqn} SET "deleted_at" = NOW() WHERE ${whereStr} RETURNING *`
+    : `DELETE FROM ${table.fqn} WHERE ${whereStr} RETURNING *`;
+
   return { text: sql, values };
 }
 

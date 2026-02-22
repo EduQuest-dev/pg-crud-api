@@ -10,6 +10,7 @@ import {
   buildBulkInsertQuery,
   buildUpdateQuery,
   buildDeleteQuery,
+  hasSoftDelete,
   ListOptions,
 } from "../db/query-builder.js";
 import { SchemaPermissions, hasPermission, hasAnyPermission } from "../auth/api-key.js";
@@ -387,7 +388,9 @@ function registerTools(
     {
       title: "Delete Record",
       description:
-        "Delete a record by primary key. Returns the deleted record. This action is irreversible.",
+        "Delete a record by primary key. Tables with a 'deleted_at' column are soft-deleted " +
+        "(the column is set to the current timestamp instead of removing the row). " +
+        "Returns the affected record.",
       inputSchema: {
         table: z.string().describe("Table route path (e.g., 'users')"),
         id: z.string().describe("Primary key value (comma-separated for composite keys)"),
@@ -411,7 +414,7 @@ function registerTools(
           return errorResult("Record not found");
         }
 
-        return textResult({ deleted: true, record: result.rows[0] });
+        return textResult({ deleted: true, softDelete: hasSoftDelete(table), record: result.rows[0] });
       } catch (error) {
         return errorResult(formatPgError(error));
       }

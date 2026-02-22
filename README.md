@@ -47,6 +47,7 @@ API key authentication is enabled by default. Keys are derived from a single `AP
 ### Generating Keys
 
 ```bash
+# Full-access key
 npm run generate-key -- <API_SECRET> <label>
 
 # Example:
@@ -55,6 +56,31 @@ npm run generate-key -- my-secret-value admin
 ```
 
 The `label` is a human-readable identifier (e.g., `admin`, `service-a`, `readonly-backend`). Different labels produce different keys, all verifiable with the same secret.
+
+### Schema-Scoped Permissions
+
+Keys can be scoped to specific schemas with read/write granularity:
+
+```bash
+# Read-write access to public schema, read-only access to reporting schema
+npm run generate-key -- my-secret admin --schemas public:rw,reporting:r
+
+# Read-only access to all schemas
+npm run generate-key -- my-secret readonly --schemas '*:r'
+
+# Write-only access to public schema
+npm run generate-key -- my-secret writer --schemas public:w
+```
+
+**Permission values:** `r` (read-only), `w` (write-only), `rw` (read and write). Use `*` as the schema name for wildcard access across all schemas. Legacy keys (generated without `--schemas`) retain full access.
+
+Permissions are cryptographically embedded in the key using HMAC-SHA256 — they cannot be tampered with or escalated without the `API_SECRET`.
+
+**Enforcement:**
+- `GET` requests require `r` permission on the table's schema
+- `POST`, `PUT`, `PATCH`, `DELETE` require `w` permission
+- Meta and schema endpoints filter tables to only show schemas the key can access
+- Denied requests receive `403 Forbidden`
 
 ### Using Keys
 
@@ -227,6 +253,7 @@ All configuration via environment variables (`.env`):
 | Variable             | Default                | Description                                         |
 |----------------------|------------------------|-----------------------------------------------------|
 | `DATABASE_URL`       | `postgresql://...`     | PostgreSQL connection string (`jdbc:` prefix auto-stripped) |
+| `DATABASE_READ_URL`  | *(none)*               | Read replica connection string (optional, falls back to `DATABASE_URL`) |
 | `PORT`               | `3000`                 | Server port                                         |
 | `HOST`               | `0.0.0.0`              | Bind address                                        |
 | `API_SECRET`         | *(none)*               | Secret for HMAC-SHA256 API key derivation           |
@@ -254,6 +281,30 @@ The API returns structured error responses for common database errors:
 | `23503`  | `400`       | Foreign key violation       |
 | `23502`  | `400`       | Not null violation          |
 | `22P02`  | `400`       | Invalid input syntax        |
+
+---
+
+## Read Replica Support
+
+For high-traffic deployments, you can route read queries to a PostgreSQL read replica by setting `DATABASE_READ_URL`:
+
+```bash
+DATABASE_URL=postgresql://user:pass@primary:5432/mydb
+DATABASE_READ_URL=postgresql://user:pass@replica:5432/mydb
+```
+
+When configured:
+
+| Operation | Pool used |
+|-----------|-----------|
+| `GET` (list, get by PK) | Read replica |
+| `POST`, `PUT`, `PATCH`, `DELETE` | Primary |
+| Schema introspection (startup) | Primary |
+| Health check | Primary |
+
+When `DATABASE_READ_URL` is **not set**, all queries use the primary `DATABASE_URL` — no behavior change.
+
+> **Note:** Read replicas may have replication lag. A record created via POST may not appear immediately in a subsequent GET. Clients that need read-after-write consistency should account for this.
 
 ---
 

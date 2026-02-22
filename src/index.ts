@@ -10,7 +10,7 @@ import { BUILD_VERSION, BUILD_GIT_HASH, BUILD_TIMESTAMP } from "./build-info.js"
 import { introspectDatabase } from "./db/introspector.js";
 import { registerCrudRoutes } from "./routes/crud.js";
 import { registerSchemaRoutes } from "./routes/schema.js";
-import { registerAuthHook, verifyApiKey } from "./auth/api-key.js";
+import { registerAuthHook, verifyApiKey, extractApiKey } from "./auth/api-key.js";
 
 async function testDatabaseConnection(pool: Pool): Promise<void> {
   let client;
@@ -236,14 +236,25 @@ async function main() {
         setTimeout(() => reject(new Error("Health check timeout")), 5000)
       );
       await Promise.race([pool.query("SELECT 1"), timeout]);
-      return {
-        status: "healthy",
+
+      const base = {
+        status: "healthy" as const,
         version: BUILD_VERSION,
         buildGitHash: BUILD_GIT_HASH,
         buildTimestamp: BUILD_TIMESTAMP,
-        tables: dbSchema.tables.size,
-        schemas: dbSchema.schemas,
       };
+
+      // Only expose table/schema details to authenticated requests
+      const authenticated = !config.apiKeysEnabled
+        || (config.apiSecret && (() => {
+          const key = extractApiKey(request);
+          return key ? verifyApiKey(key, config.apiSecret!).valid : false;
+        })());
+
+      if (authenticated) {
+        return { ...base, tables: dbSchema.tables.size, schemas: dbSchema.schemas };
+      }
+      return base;
     } catch (err) {
       request.log.error(err, "Health check failed");
       return reply.status(503).send({ status: "unhealthy" });

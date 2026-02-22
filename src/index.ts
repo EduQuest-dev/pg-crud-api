@@ -11,6 +11,7 @@ import { introspectDatabase, computeDatabaseHash } from "./db/introspector.js";
 import { registerCrudRoutes } from "./routes/crud.js";
 import { registerSchemaRoutes } from "./routes/schema.js";
 import { registerAuthHook, verifyApiKey, extractApiKey } from "./auth/api-key.js";
+import { registerMcpRoutes } from "./mcp/routes.js";
 
 async function testDatabaseConnection(pool: Pool): Promise<void> {
   let client;
@@ -269,6 +270,8 @@ async function main() {
   }
   await registerCrudRoutes(app, pool, dbSchema, readPool);
   await registerSchemaRoutes(app, dbSchema);
+  await registerMcpRoutes(app, { pool, readPool, dbSchema });
+  console.log("🤖 MCP endpoint: /mcp (Streamable HTTP)");
 
   // ── Start server ──
   try {

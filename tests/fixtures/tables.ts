@@ -136,6 +136,34 @@ export function makeTableWithNonPublicFk(): TableInfo {
   };
 }
 
+export function makeSoftDeleteTable(): TableInfo {
+  return {
+    schema: "public",
+    name: "posts",
+    fqn: '"public"."posts"',
+    routePath: "posts",
+    primaryKeys: ["id"],
+    foreignKeys: [
+      {
+        constraintName: "posts_user_id_fkey",
+        column: "user_id",
+        refSchema: "public",
+        refTable: "users",
+        refColumn: "id",
+      },
+    ],
+    columns: [
+      makeColumn({ name: "id", dataType: "integer", udtName: "int4", isNullable: false, hasDefault: true, defaultValue: "nextval('posts_id_seq'::regclass)", ordinalPosition: 1 }),
+      makeColumn({ name: "user_id", dataType: "integer", udtName: "int4", isNullable: false, hasDefault: false, ordinalPosition: 2 }),
+      makeColumn({ name: "title", dataType: "character varying", udtName: "varchar", isNullable: false, hasDefault: false, maxLength: 255, ordinalPosition: 3 }),
+      makeColumn({ name: "body", dataType: "text", udtName: "text", isNullable: true, hasDefault: false, ordinalPosition: 4 }),
+      makeColumn({ name: "created_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: false, hasDefault: true, defaultValue: "now()", ordinalPosition: 5 }),
+      makeColumn({ name: "updated_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, hasDefault: false, ordinalPosition: 6 }),
+      makeColumn({ name: "deleted_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, hasDefault: false, ordinalPosition: 7 }),
+    ],
+  };
+}
+
 export function makeDatabaseSchema(tables: TableInfo[]): DatabaseSchema {
   const map = new Map<string, TableInfo>();
   const schemas = new Set<string>();

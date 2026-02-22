@@ -230,11 +230,17 @@ export function buildInsertQuery(
     throw new Error("No valid columns provided for insert");
   }
 
-  const colNames = validColumns.map((c) => quoteIdent(c.name)).join(", ");
-  const placeholders = validColumns.map((_, i) => `$${i + 1}`).join(", ");
+  const colParts = validColumns.map((c) => quoteIdent(c.name));
+  const valParts = validColumns.map((_, i) => `$${i + 1}`);
   const values = validColumns.map((c) => data[c.name]);
 
-  const sql = `INSERT INTO ${table.fqn} (${colNames}) VALUES (${placeholders}) RETURNING *`;
+  // Auto-set updated_at on insert when the column exists and wasn't explicitly provided
+  if (hasUpdatedAt(table) && data["updated_at"] === undefined) {
+    colParts.push('"updated_at"');
+    valParts.push("NOW()");
+  }
+
+  const sql = `INSERT INTO ${table.fqn} (${colParts.join(", ")}) VALUES (${valParts.join(", ")}) RETURNING *`;
   return { text: sql, values };
 }
 
@@ -262,6 +268,10 @@ export function buildBulkInsertQuery(
   const columns = Array.from(columnSet);
   if (columns.length === 0) throw new Error("No valid columns in bulk insert data");
 
+  // Auto-include updated_at when the column exists
+  const autoUpdatedAt = hasUpdatedAt(table) && !columnSet.has("updated_at");
+  if (autoUpdatedAt) columns.push("updated_at");
+
   const colNames = columns.map(quoteIdent).join(", ");
   const values: unknown[] = [];
   const rowPlaceholders: string[] = [];
@@ -269,6 +279,10 @@ export function buildBulkInsertQuery(
 
   for (const row of rows) {
     const placeholders = columns.map((col) => {
+      // For auto-added updated_at, use NOW() literal instead of a parameter
+      if (col === "updated_at" && autoUpdatedAt) {
+        return "NOW()";
+      }
       values.push(row[col] ?? null);
       return `$${paramIdx++}`;
     });
@@ -303,6 +317,11 @@ export function buildUpdateQuery(
     return `${quoteIdent(c.name)} = $${paramIdx++}`;
   });
 
+  // Auto-set updated_at when the column exists and wasn't explicitly provided
+  if (hasUpdatedAt(table) && data["updated_at"] === undefined) {
+    setClauses.push('"updated_at" = NOW()');
+  }
+
   const whereClauses = table.primaryKeys.map((pk) => {
     values.push(pkValues[pk]);
     return `${quoteIdent(pk)} = $${paramIdx++}`;
@@ -313,6 +332,14 @@ export function buildUpdateQuery(
 }
 
 // ─── DELETE ──────────────────────────────────────────────────────────
+
+export function hasSoftDelete(table: TableInfo): boolean {
+  return table.columns.some((c) => c.name === "deleted_at");
+}
+
+export function hasUpdatedAt(table: TableInfo): boolean {
+  return table.columns.some((c) => c.name === "updated_at");
+}
 
 export function buildDeleteQuery(
   table: TableInfo,
@@ -326,7 +353,18 @@ export function buildDeleteQuery(
     return `${quoteIdent(pk)} = $${paramIdx++}`;
   });
 
-  const sql = `DELETE FROM ${table.fqn} WHERE ${whereClauses.join(" AND ")} RETURNING *`;
+  const whereStr = whereClauses.join(" AND ");
+
+  // Soft delete: if the table has a "deleted_at" column, set it to NOW() instead of deleting
+  if (hasSoftDelete(table)) {
+    const setCols = ['"deleted_at" = NOW()'];
+    if (hasUpdatedAt(table)) setCols.push('"updated_at" = NOW()');
+    const sql = `UPDATE ${table.fqn} SET ${setCols.join(", ")} WHERE ${whereStr} RETURNING *`;
+    return { text: sql, values };
+  }
+
+  const sql = `DELETE FROM ${table.fqn} WHERE ${whereStr} RETURNING *`;
+
   return { text: sql, values };
 }
 

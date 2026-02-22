@@ -16,10 +16,14 @@ import {
   buildBulkInsertQuery,
   buildUpdateQuery,
   buildDeleteQuery,
+  hasSoftDelete,
+  hasUpdatedAt,
 } from "../../src/db/query-builder.js";
-import { makeUsersTable, makeCompositePkTable, makeNoPkTable } from "../fixtures/tables.js";
+import { makeColumn, makeUsersTable, makeCompositePkTable, makeNoPkTable, makeSoftDeleteTable } from "../fixtures/tables.js";
+import type { TableInfo } from "../../src/db/introspector.js";
 
 const users = makeUsersTable();
+const softDeleteTable = makeSoftDeleteTable();
 const compositePk = makeCompositePkTable();
 
 // ── buildSelectQuery ────────────────────────────────────────────────
@@ -321,6 +325,29 @@ describe("buildInsertQuery", () => {
     expect(result.text).toContain('"active"');
     expect(result.values).toHaveLength(4);
   });
+
+  it("auto-sets updated_at to NOW() when column exists and not provided", () => {
+    const result = buildInsertQuery(softDeleteTable, { user_id: 1, title: "Hello" });
+    expect(result.text).toContain('"updated_at"');
+    expect(result.text).toContain("NOW()");
+    // NOW() is a literal, not a parameter — values should only have user_id and title
+    expect(result.values).toEqual([1, "Hello"]);
+  });
+
+  it("does not auto-set updated_at when explicitly provided", () => {
+    const ts = "2025-06-01T00:00:00Z";
+    const result = buildInsertQuery(softDeleteTable, { user_id: 1, title: "Hello", updated_at: ts });
+    // Should use the provided value as a parameter, not NOW()
+    expect(result.values).toContain(ts);
+    // NOW() should not appear for updated_at since user provided it
+    expect(result.text).not.toMatch(/NOW\(\)/);
+  });
+
+  it("does not add updated_at for tables without the column", () => {
+    const result = buildInsertQuery(users, { name: "Alice", email: "a@b.com" });
+    expect(result.text).not.toContain("updated_at");
+    expect(result.text).not.toContain("NOW()");
+  });
 });
 
 // ── buildBulkInsertQuery ────────────────────────────────────────────
@@ -364,6 +391,38 @@ describe("buildBulkInsertQuery", () => {
     expect(() => buildBulkInsertQuery(users, [{ nonexistent: "v" }])).toThrow(
       "No valid columns in bulk insert data"
     );
+  });
+
+  it("auto-sets updated_at to NOW() in bulk insert when column exists", () => {
+    const rows = [
+      { user_id: 1, title: "Post A" },
+      { user_id: 2, title: "Post B" },
+    ];
+    const result = buildBulkInsertQuery(softDeleteTable, rows);
+    expect(result.text).toContain('"updated_at"');
+    // Each row should have NOW() for updated_at
+    const nowCount = (result.text.match(/NOW\(\)/g) || []).length;
+    expect(nowCount).toBe(2);
+    // Parameters should only contain user_id and title for each row (no updated_at params)
+    expect(result.values).toEqual([1, "Post A", 2, "Post B"]);
+  });
+
+  it("does not auto-add updated_at when rows explicitly provide it", () => {
+    const ts = "2025-06-01T00:00:00Z";
+    const rows = [
+      { user_id: 1, title: "Post A", updated_at: ts },
+    ];
+    const result = buildBulkInsertQuery(softDeleteTable, rows);
+    expect(result.text).toContain('"updated_at"');
+    expect(result.text).not.toMatch(/NOW\(\)/);
+    expect(result.values).toContain(ts);
+  });
+
+  it("does not add updated_at for tables without the column", () => {
+    const rows = [{ name: "Alice", email: "a@b.com" }];
+    const result = buildBulkInsertQuery(users, rows);
+    expect(result.text).not.toContain("updated_at");
+    expect(result.text).not.toContain("NOW()");
   });
 });
 
@@ -410,6 +469,28 @@ describe("buildUpdateQuery", () => {
     expect(result.text).toContain('"active" = $3');
     expect(result.values).toEqual(["Bob", "bob@test.com", false, "42"]);
   });
+
+  it("auto-sets updated_at to NOW() when column exists and not provided", () => {
+    const result = buildUpdateQuery(softDeleteTable, { id: "10" }, { title: "New Title" });
+    expect(result.text).toContain('"title" = $1');
+    expect(result.text).toContain('"updated_at" = NOW()');
+    expect(result.text).toContain('"id" = $2');
+    expect(result.values).toEqual(["New Title", "10"]);
+  });
+
+  it("does not auto-set updated_at when explicitly provided", () => {
+    const ts = "2025-06-01T00:00:00Z";
+    const result = buildUpdateQuery(softDeleteTable, { id: "10" }, { title: "New Title", updated_at: ts });
+    expect(result.text).toContain('"updated_at" = $2');
+    expect(result.text).not.toMatch(/"updated_at" = NOW\(\)/);
+    expect(result.values).toContain(ts);
+  });
+
+  it("does not add updated_at for tables without the column", () => {
+    const result = buildUpdateQuery(users, { id: "42" }, { name: "Bob" });
+    expect(result.text).not.toContain("updated_at");
+    expect(result.text).not.toContain("NOW()");
+  });
 });
 
 // ── buildDeleteQuery ────────────────────────────────────────────────
@@ -428,5 +509,66 @@ describe("buildDeleteQuery", () => {
     expect(result.text).toContain('"user_id" = $1');
     expect(result.text).toContain('"role_id" = $2');
     expect(result.values).toEqual(["42", "7"]);
+  });
+
+  it("generates soft-delete UPDATE when table has deleted_at column", () => {
+    const result = buildDeleteQuery(softDeleteTable, { id: "10" });
+    expect(result.text).toContain("UPDATE");
+    expect(result.text).toContain('SET "deleted_at" = NOW()');
+    expect(result.text).toContain('"updated_at" = NOW()');
+    expect(result.text).toContain('"id" = $1');
+    expect(result.text).toContain("RETURNING *");
+    expect(result.text).not.toContain("DELETE");
+    expect(result.values).toEqual(["10"]);
+  });
+
+  it("soft-deletes without updated_at when table has deleted_at but no updated_at", () => {
+    const softOnlyTable: TableInfo = {
+      schema: "public",
+      name: "events",
+      fqn: '"public"."events"',
+      routePath: "events",
+      primaryKeys: ["id"],
+      foreignKeys: [],
+      columns: [
+        makeColumn({ name: "id", dataType: "integer", udtName: "int4", hasDefault: true, ordinalPosition: 1 }),
+        makeColumn({ name: "name", dataType: "text", udtName: "text", ordinalPosition: 2 }),
+        makeColumn({ name: "deleted_at", dataType: "timestamp with time zone", udtName: "timestamptz", isNullable: true, ordinalPosition: 3 }),
+      ],
+    };
+    const result = buildDeleteQuery(softOnlyTable, { id: "1" });
+    expect(result.text).toContain('SET "deleted_at" = NOW()');
+    expect(result.text).not.toContain("updated_at");
+  });
+
+  it("generates hard DELETE when table has no deleted_at column", () => {
+    const result = buildDeleteQuery(users, { id: "42" });
+    expect(result.text).toContain("DELETE FROM");
+    expect(result.text).not.toContain("UPDATE");
+    expect(result.text).not.toContain("deleted_at");
+  });
+});
+
+// ── hasSoftDelete ──────────────────────────────────────────────────
+
+describe("hasSoftDelete", () => {
+  it("returns true for tables with a deleted_at column", () => {
+    expect(hasSoftDelete(softDeleteTable)).toBe(true);
+  });
+
+  it("returns false for tables without a deleted_at column", () => {
+    expect(hasSoftDelete(users)).toBe(false);
+  });
+});
+
+// ── hasUpdatedAt ───────────────────────────────────────────────────
+
+describe("hasUpdatedAt", () => {
+  it("returns true for tables with an updated_at column", () => {
+    expect(hasUpdatedAt(softDeleteTable)).toBe(true);
+  });
+
+  it("returns false for tables without an updated_at column", () => {
+    expect(hasUpdatedAt(users)).toBe(false);
   });
 });

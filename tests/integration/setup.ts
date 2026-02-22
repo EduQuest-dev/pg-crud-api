@@ -30,6 +30,7 @@ import { registerSchemaRoutes } from "../../src/routes/schema.js";
 import { registerAuthHook, extractApiKey, verifyApiKey } from "../../src/auth/api-key.js";
 import type { DatabaseSchema } from "../../src/db/introspector.js";
 import { computeDatabaseHash } from "../../src/db/introspector.js";
+import { registerMcpRoutes } from "../../src/mcp/routes.js";
 
 export function createMockPool() {
   const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
@@ -121,6 +122,7 @@ export async function buildTestApp(options: BuildTestAppOptions = DEFAULT_OPTION
   console.log = consoleLog;
 
   await registerSchemaRoutes(app, options.dbSchema);
+  await registerMcpRoutes(app, { pool, readPool: options.readPool ?? pool, dbSchema: options.dbSchema });
   await app.ready();
 
   return app;

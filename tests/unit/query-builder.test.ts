@@ -106,6 +106,20 @@ describe("buildSelectQuery", () => {
     expect(result.text).toContain('ORDER BY "id" ASC');
   });
 
+  it("omits ORDER BY when table has no columns and no PKs", () => {
+    const emptyTable: TableInfo = {
+      schema: "public",
+      name: "empty",
+      fqn: '"public"."empty"',
+      routePath: "empty",
+      primaryKeys: [],
+      foreignKeys: [],
+      columns: [],
+    };
+    const result = buildSelectQuery(emptyTable, {});
+    expect(result.text).not.toContain("ORDER BY");
+  });
+
   it("applies eq filter", () => {
     const result = buildSelectQuery(users, { filters: { name: "eq:John" } });
     expect(result.text).toContain('"name" = $1');

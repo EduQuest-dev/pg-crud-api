@@ -135,11 +135,27 @@ export function buildSelectQuery(table: TableInfo, opts: ListOptions): QueryResu
 
   let sql = `SELECT ${columns} FROM ${table.fqn}${where.clause}`;
 
-  // Sorting
-  const sortCol = opts.sortBy && isValidColumn(table, opts.sortBy) ? opts.sortBy : (table.primaryKeys[0] ?? table.columns[0]?.name);
-  if (sortCol) {
-    const order = opts.sortOrder === "desc" ? "DESC" : "ASC";
-    sql += ` ORDER BY ${quoteIdent(sortCol)} ${order}`;
+  // Sorting — accept comma-separated sortBy for stable pagination on tied columns.
+  const requestedCols = (opts.sortBy ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((c) => isValidColumn(table, c));
+  const fallbackCol = table.primaryKeys[0] ?? table.columns[0]?.name;
+  const sortCols = requestedCols.length > 0 ? requestedCols : (fallbackCol ? [fallbackCol] : []);
+  const orderTokens = (opts.sortOrder ?? "asc")
+    .toString()
+    .split(",")
+    .map((s) => s.trim());
+  if (sortCols.length > 0) {
+    const orderBy = sortCols
+      .map((c, i) => {
+        const tok = orderTokens[i] ?? orderTokens[0];
+        const dir = tok.toUpperCase() === "DESC" ? "DESC" : "ASC";
+        return `${quoteIdent(c)} ${dir}`;
+      })
+      .join(", ");
+    sql += ` ORDER BY ${orderBy}`;
   }
 
   sql += ` LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;

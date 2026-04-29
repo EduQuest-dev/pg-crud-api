@@ -12,7 +12,7 @@ export interface ListOptions {
   page?: number;
   pageSize?: number;
   sortBy?: string;
-  sortOrder?: "asc" | "desc";
+  sortOrder?: "asc" | "desc" | string;
   filters?: Record<string, unknown>;
   search?: string;
   searchColumns?: string[];

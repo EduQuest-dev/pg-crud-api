@@ -90,7 +90,7 @@ describe("buildSelectQuery", () => {
   it("supports comma-separated sortBy with per-column sortOrder", () => {
     const result = buildSelectQuery(users, {
       sortBy: "email,id",
-      sortOrder: "asc,desc" as "asc" | "desc",
+      sortOrder: "asc,desc",
     });
     expect(result.text).toContain('ORDER BY "email" ASC, "id" DESC');
   });

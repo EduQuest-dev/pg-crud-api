@@ -82,6 +82,30 @@ describe("buildSelectQuery", () => {
     expect(result.text).toContain('"id" ASC');
   });
 
+  it("supports comma-separated sortBy with single sortOrder applied to all", () => {
+    const result = buildSelectQuery(users, { sortBy: "email,id", sortOrder: "asc" });
+    expect(result.text).toContain('ORDER BY "email" ASC, "id" ASC');
+  });
+
+  it("supports comma-separated sortBy with per-column sortOrder", () => {
+    const result = buildSelectQuery(users, {
+      sortBy: "email,id",
+      sortOrder: "asc,desc" as "asc" | "desc",
+    });
+    expect(result.text).toContain('ORDER BY "email" ASC, "id" DESC');
+  });
+
+  it("filters out invalid columns from a comma-separated sortBy list", () => {
+    const result = buildSelectQuery(users, { sortBy: "email,nonexistent,id" });
+    expect(result.text).toContain('ORDER BY "email" ASC, "id" ASC');
+    expect(result.text).not.toContain("nonexistent");
+  });
+
+  it("falls back to PK when every sortBy column is invalid", () => {
+    const result = buildSelectQuery(users, { sortBy: "nope1,nope2" });
+    expect(result.text).toContain('ORDER BY "id" ASC');
+  });
+
   it("applies eq filter", () => {
     const result = buildSelectQuery(users, { filters: { name: "eq:John" } });
     expect(result.text).toContain('"name" = $1');

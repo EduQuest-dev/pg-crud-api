@@ -211,8 +211,14 @@ export async function registerCrudRoutes(
           properties: {
             page: { type: "integer", minimum: 1, default: 1 },
             pageSize: { type: "integer", minimum: 1, maximum: config.maxPageSize, default: config.defaultPageSize },
-            sortBy: { type: "string", enum: table.columns.map((c) => c.name) },
-            sortOrder: { type: "string", enum: ["asc", "desc"] },
+            sortBy: {
+              type: "string",
+              description: `Sort column. Comma-separated for composite (e.g. "updated_at,id") for stable pagination on tied values. Valid columns: ${table.columns.map((c) => c.name).join(", ")}. Unknown columns are filtered out; if none remain, falls back to the primary key.`,
+            },
+            sortOrder: {
+              type: "string",
+              description: 'Sort direction: "asc" or "desc". Comma-separated for per-column order matching sortBy (e.g. "asc,desc"). A single value applies to all columns.',
+            },
             select: { type: "string", description: "Comma-separated column names" },
             search: { type: "string", minLength: 1, maxLength: 500 },
             searchColumns: { type: "string", description: "Comma-separated columns to search" },

@@ -75,6 +75,31 @@ describe("CRUD Routes - LIST", () => {
     expect(selectCall.text).toContain('"name" DESC');
   });
 
+  it("accepts comma-separated composite sortBy through the route", async () => {
+    vi.mocked(mockPool.query)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      .mockResolvedValueOnce({ rows: [{ total: "0" }], rowCount: 1 } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/users?sortBy=name,id&sortOrder=asc,desc" });
+
+    expect(res.statusCode).toBe(200);
+    const selectCall = vi.mocked(mockPool.query).mock.calls[0][0] as any;
+    expect(selectCall.text).toContain('"name" ASC, "id" DESC');
+  });
+
+  it("filters unknown columns from comma-separated sortBy at route level", async () => {
+    vi.mocked(mockPool.query)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
+      .mockResolvedValueOnce({ rows: [{ total: "0" }], rowCount: 1 } as any);
+
+    const res = await app.inject({ method: "GET", url: "/api/users?sortBy=name,nonexistent,id" });
+
+    expect(res.statusCode).toBe(200);
+    const selectCall = vi.mocked(mockPool.query).mock.calls[0][0] as any;
+    expect(selectCall.text).toContain('"name" ASC, "id" ASC');
+    expect(selectCall.text).not.toContain("nonexistent");
+  });
+
   it("passes filter params to query", async () => {
     vi.mocked(mockPool.query)
       .mockResolvedValueOnce({ rows: [], rowCount: 0 } as any)
